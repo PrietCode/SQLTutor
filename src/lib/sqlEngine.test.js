@@ -164,9 +164,66 @@ test('CREATE TABLE preserves many columns and table-level foreign keys', () => {
   assert.deepEqual(db.CIUDADES.columns, ['Id', 'Nombre', 'Provincia', 'CodigoPostal', 'Latitud', 'Longitud']);
   assert.equal(db.CIUDADES.columnTypes.Nombre, 'VARCHAR(80)');
   assert.equal(db.CIUDADES.columnTypes.Latitud, 'FLOAT');
-  assert.equal(db.CIUDADES.constraints[0].type, 'FOREIGN KEY');
-  assert.deepEqual(db.CIUDADES.constraints[0].references, { table: 'PROVINCIAS', columns: ['Id'] });
+  assert.equal(db.CIUDADES.constraints.length, 2);
+  assert.ok(db.CIUDADES.constraints.find(c => c.type === 'PRIMARY KEY' && c.columns[0] === 'Id'));
+  assert.ok(db.CIUDADES.constraints.find(c => c.type === 'FOREIGN KEY' && c.references.table === 'PROVINCIAS'));
   assert.equal(db.CIUDADES.columns.includes('FOREIGN'), false);
+});
+
+test('INSERT rejects duplicate PRIMARY KEY values with SQL-Server-style error', () => {
+  let db = executeSql('CREATE TABLE PROVINCIAS (Id INT PRIMARY KEY, Nombre VARCHAR(50));', createSeedDatabase()).db;
+  db = executeSql("INSERT INTO PROVINCIAS (Id, Nombre) VALUES (1,'Cordoba');", db).db;
+  assert.throws(() => executeSql("INSERT INTO PROVINCIAS (Id, Nombre) VALUES (1,'Mendoza');", db), /Infraccion de la restriccion PRIMARY KEY/);
+  assert.throws(() => executeSql("INSERT INTO PROVINCIAS (Id, Nombre) VALUES (1,'Buenos Aires');", db), /clave duplicada.*\(1\)/);
+  assert.equal(db.PROVINCIAS.length, 1);
+});
+
+test('INSERT catches duplicate PK across multiple VALUES rows', () => {
+  const db = executeSql('CREATE TABLE TEST (Id INT PRIMARY KEY, Val INT);', createSeedDatabase()).db;
+  assert.throws(() => executeSql('INSERT INTO TEST (Id, Val) VALUES (1,10), (1,20);', db), /clave duplicada.*\(1\)/);
+  assert.throws(() => executeSql('INSERT INTO TEST (Id, Val) VALUES (2,10), (1,20), (1,30);', db), /clave duplicada.*\(1\)/);
+});
+
+test('INSERT rejects NULL value in PRIMARY KEY column', () => {
+  let db = executeSql('CREATE TABLE PROVINCIAS (Id INT PRIMARY KEY, Nombre VARCHAR(50));', createSeedDatabase()).db;
+  assert.throws(() => executeSql("INSERT INTO PROVINCIAS (Id, Nombre) VALUES (NULL,'Cordoba');", db), /NULL.*columna 'Id'/);
+  assert.throws(() => executeSql("INSERT INTO PROVINCIAS (Nombre) VALUES ('Cordoba');", db), /NULL.*columna 'Id'/);
+});
+
+test('INSERT rejects FOREIGN KEY violation when referenced value does not exist', () => {
+  let db = executeSql('CREATE TABLE PROVINCIAS (Id INT PRIMARY KEY, Nombre VARCHAR(50));', createSeedDatabase()).db;
+  db = executeSql(`CREATE TABLE CIUDADES (
+    Id INT PRIMARY KEY, Nombre VARCHAR(80), Provincia INT,
+    FOREIGN KEY (Provincia) REFERENCES PROVINCIAS(Id)
+  );`, db).db;
+  assert.throws(() => executeSql("INSERT INTO CIUDADES (Id, Nombre, Provincia) VALUES (1,'Carlos Paz',99);", db), /conflicto con la restriccion FOREIGN KEY/);
+  assert.throws(() => executeSql("INSERT INTO CIUDADES (Id, Nombre, Provincia) VALUES (1,'Carlos Paz',99);", db), /conflicto ocurrio en la tabla 'dbo.CIUDADES'/);
+  db = executeSql("INSERT INTO PROVINCIAS (Id, Nombre) VALUES (1,'Cordoba');", db).db;
+  assert.doesNotThrow(() => executeSql("INSERT INTO CIUDADES (Id, Nombre, Provincia) VALUES (1,'Carlos Paz',1);", db));
+});
+
+test('INSERT with self-referencing FK allows forward references within same VALUES', () => {
+  let db = executeSql(`CREATE TABLE EMPLEADOS (
+    Legajo INT PRIMARY KEY, Nombre VARCHAR(50), Legajo_jefe INT,
+    FOREIGN KEY (Legajo_jefe) REFERENCES EMPLEADOS(Legajo)
+  );`, createSeedDatabase()).db;
+  db = executeSql("INSERT INTO EMPLEADOS VALUES (100,'Juan',NULL);", db).db;
+  const result = executeSql(
+    "INSERT INTO EMPLEADOS VALUES (101,'Raul',100), (102,'Maria',100), (103,'Carlos',100), (104,'Lucia',101), (105,'Pedro',101);", db
+  );
+  assert.equal(result.db.EMPLEADOS.length, 6);
+  assert.equal(result.db.EMPLEADOS.find(e => e.Legajo === 104).Legajo_jefe, 101);
+});
+
+test('INSERT with self-referencing FK correctly rejects invalid forward reference', () => {
+  let db = executeSql(`CREATE TABLE EMPLEADOS (
+    Legajo INT PRIMARY KEY, Nombre VARCHAR(50), Legajo_jefe INT,
+    FOREIGN KEY (Legajo_jefe) REFERENCES EMPLEADOS(Legajo)
+  );`, createSeedDatabase()).db;
+  db = executeSql("INSERT INTO EMPLEADOS VALUES (100,'Juan',NULL);", db).db;
+  assert.throws(() => executeSql(
+    "INSERT INTO EMPLEADOS VALUES (101,'Raul',200);", db
+  ), /conflicto con la restriccion FOREIGN KEY/);
 });
 
 test('unsupported or malformed SQL returns a clear error', () => {

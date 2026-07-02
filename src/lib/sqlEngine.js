@@ -78,12 +78,11 @@ const columnDefinition = (definition) => {
   if (constraintDefinition(definition)) return null;
   const match = definition.trim().match(/^(\w+)\s+([A-Za-z]+(?:\s*\([^)]*\))?)/);
   if (!match) return null;
+  const constraints = [];
   const inlineReference = definition.match(/\bREFERENCES\s+(\w+)\s*\(([^)]+)\)/i);
-  return {
-    name: match[1],
-    type: match[2].replace(/\s+/g, '').toUpperCase(),
-    constraint: inlineReference ? { type: 'FOREIGN KEY', columns: [match[1]], references: { table: inlineReference[1], columns: splitComma(inlineReference[2]) } } : null
-  };
+  if (inlineReference) constraints.push({ type: 'FOREIGN KEY', columns: [match[1]], references: { table: inlineReference[1], columns: splitComma(inlineReference[2]) } });
+  if (/\bPRIMARY\s+KEY\b/i.test(definition)) constraints.push({ type: 'PRIMARY KEY', columns: [match[1]] });
+  return { name: match[1], type: match[2].replace(/\s+/g, '').toUpperCase(), constraint: constraints };
 };
 const rememberColumns = (rows, columns, columnTypes = {}, constraints = []) => { rows.columns = columns; rows.columnTypes = columnTypes; rows.constraints = constraints; return rows; };
 const qualify = (row, alias) => Object.fromEntries([
@@ -308,6 +307,60 @@ function executeMutation(sql, db) {
       if (values.length !== columns.length) throw new Error(`VALUES esperaba ${columns.length} valores y recibio ${values.length}.`);
       return Object.fromEntries(columns.map((key, i) => [key, values[i]]));
     });
+    const pkConstraints = tableConstraints(next[table]).filter(c => c.type === 'PRIMARY KEY');
+    if (pkConstraints.length) {
+      for (const pk of pkConstraints) {
+        const pkCols = pk.columns;
+        for (let i = 0; i < tuples.length; i++) {
+          const tuple = tuples[i];
+          const pkValues = pkCols.map(col => tuple[col]);
+          if (pkValues.some(v => v === undefined)) continue;
+          const existing = [...next[table], ...tuples.slice(0, i)].find(ex => pkCols.every(col => ex[col] === tuple[col]));
+          if (existing) {
+            const tableUpper = table.toUpperCase();
+            let hash = 2166136261;
+            for (const c of tableUpper + pkCols.join('').toUpperCase()) {
+              hash = (hash ^ c.charCodeAt(0)) * 16777619;
+              hash = hash >>> 0;
+            }
+            const objId = hash.toString(16).toUpperCase().padStart(8, '0');
+            const constraintName = `PK__${tableUpper}__${objId}${objId}`;
+            throw new Error(`Infraccion de la restriccion PRIMARY KEY '${constraintName}'. No se puede insertar una clave duplicada en el objeto 'dbo.${tableUpper}'. El valor de la clave duplicada es (${pkValues.join(', ')}).`);
+          }
+        }
+      }
+    }
+    for (const tuple of tuples) {
+      for (const pk of pkConstraints) {
+        const pkValues = pk.columns.map(col => tuple[col]);
+        const nullIdx = pkValues.findIndex(v => v === null || v === undefined);
+        if (nullIdx !== -1) {
+          throw new Error(`No se permite insertar un valor NULL en la columna '${pk.columns[nullIdx]}', tabla 'dbo.${table.toUpperCase()}'. La instruccion INSERT termino.`);
+        }
+      }
+    }
+    const fkConstraints = tableConstraints(next[table]).filter(c => c.type === 'FOREIGN KEY');
+    for (const fk of fkConstraints) {
+      const refTableName = findTable(next, fk.references.table);
+      if (!refTableName) continue;
+      for (const tuple of tuples) {
+        const fkValues = fk.columns.map(col => tuple[col]);
+        if (fkValues.some(v => v === null || v === undefined)) continue;
+        const refRows = refTableName === table ? [...next[refTableName], ...tuples] : next[refTableName];
+        const exists = refRows.some(row => fk.references.columns.every((refCol, i) => row[refCol] === fkValues[i]));
+        if (!exists) {
+          const colNames = fk.columns.join('_');
+          let hash = 2166136261;
+          for (const c of table.toUpperCase() + refTableName.toUpperCase() + colNames) {
+            hash = (hash ^ c.charCodeAt(0)) * 16777619;
+            hash = hash >>> 0;
+          }
+          const objId = hash.toString(16).toUpperCase().padStart(8, '0');
+          const constraintName = `FK__${table.toUpperCase()}__${colNames}__${objId}`;
+          throw new Error(`La instruccion INSERT entro en conflicto con la restriccion FOREIGN KEY '${constraintName}'. El conflicto ocurrio en la tabla 'dbo.${table.toUpperCase()}'.`);
+        }
+      }
+    }
     next[table].columns = [...new Set([...tableColumns(next[table]), ...columns])];
     next[table].columnTypes = tableColumnTypes(next[table]);
     next[table].push(...tuples); return { db: next, result: tuples, statement: 'INSERT', message: `${tuples.length} ${tuples.length === 1 ? 'fila insertada' : 'filas insertadas'}`, steps: [step('TARGET', `Abrir ${table}`, 'La tabla destino se prepara para recibir una o mas filas.', db[table], 'violet'), step('VALUES', 'Construir filas nuevas', 'VALUES asigna cada dato a su columna y permite multiples tuplas separadas por coma.', tuples, 'amber'), step('INSERT', 'Insertar filas', `${tuples.length} ${tuples.length === 1 ? 'registro nuevo queda' : 'registros nuevos quedan'} resaltados en verde dentro de la tabla.`, next[table], 'green', { kind: 'insert', addedRows: displayRows(tuples) })] };
@@ -343,7 +396,7 @@ function executeDdl(sql, db) {
     const definitions = rawDefinitions.map(columnDefinition).filter(Boolean);
     const constraints = [
       ...rawDefinitions.map(constraintDefinition).filter(Boolean),
-      ...definitions.map((definition) => definition.constraint).filter(Boolean)
+      ...definitions.flatMap((definition) => definition.constraint)
     ];
     const columns = definitions.map((definition) => definition.name);
     const columnTypes = Object.fromEntries(definitions.map((definition) => [definition.name, definition.type]));
