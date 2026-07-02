@@ -1,0 +1,100 @@
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Package manager caches
+.npm/
+.pnpm-store/
+.yarn/
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# Production and framework builds
+dist/
+build/
+out/
+.vite/
+.next/
+.nuxt/
+.svelte-kit/
+
+# Test and coverage output
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Hosting and deployment
+.vercel/
+.netlify/
+
+# TypeScript incremental cache
+*.tsbuildinfo
+
+# Caches
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+
+# Editor folders
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Windows / WSL temporary files
+*.lnk
+*.Zone.Identifier
+*.stackdump
+
+# Temporary and backup files
+*.local
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+~$*
+
+# Archives and accidental compressed backups
+*.rar
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+
+# Accidental copied Git metadata
+ (2).git/
+*.git/
