@@ -1,4 +1,46 @@
-const clean = (sql) => sql.trim().replace(/;\s*$/, '');
+const stripSqlComments = (sql) => {
+  let result = ''; let quoted = false; let lineComment = false; let blockComment = false;
+  for (let i = 0; i < sql.length; i += 1) {
+    const char = sql[i]; const next = sql[i + 1];
+    if (lineComment) { if (char === '\n') { lineComment = false; result += char; } continue; }
+    if (blockComment) { if (char === '*' && next === '/') { blockComment = false; i += 1; } continue; }
+    if (!quoted && char === '-' && next === '-') { lineComment = true; i += 1; continue; }
+    if (!quoted && char === '/' && next === '*') { blockComment = true; i += 1; continue; }
+    if (char === "'" && next === "'") { result += char + next; i += 1; continue; }
+    if (char === "'") quoted = !quoted;
+    result += char;
+  }
+  return result;
+};
+
+export function splitSqlStatements(input) {
+  const sql = stripSqlComments(input).replace(/^\s*GO\s*$/gim, ';');
+  const statements = []; let current = ''; let quoted = false;
+  for (let i = 0; i < sql.length; i += 1) {
+    const char = sql[i]; const next = sql[i + 1];
+    if (char === "'" && next === "'") { current += char + next; i += 1; continue; }
+    if (char === "'") quoted = !quoted;
+    if (!quoted && char === ';') {
+      if (current.trim()) statements.push(current.trim());
+      current = '';
+    } else current += char;
+  }
+  if (current.trim()) statements.push(current.trim());
+  return statements;
+}
+
+const firstStatement = (sql) => {
+  const statements = splitSqlStatements(sql);
+  if (statements.length) return statements[0];
+  let quoted = false;
+  for (let i = 0; i < sql.length; i += 1) {
+    if (sql[i] === "'" && sql[i + 1] === "'") { i += 1; continue; }
+    if (sql[i] === "'") quoted = !quoted;
+    if (!quoted && sql[i] === ';') return sql.slice(0, i).trim();
+  }
+  return sql.trim();
+};
+const clean = (sql) => firstStatement(sql).replace(/;\s*$/, '');
 const unquote = (value) => {
   const v = String(value).trim();
   if (/^'.*'$/.test(v)) return v.slice(1, -1).replace(/''/g, "'");
@@ -20,11 +62,30 @@ const displayRows = (rows) => rows.map((row) => Object.fromEntries(
 const findTable = (db, name) => Object.keys(db).find((key) => key.toLowerCase() === name.toLowerCase());
 const tableColumns = (rows) => rows.columns || Object.keys(rows[0] || {});
 const tableColumnTypes = (rows) => rows.columnTypes || {};
-const columnDefinition = (definition) => {
-  const match = definition.trim().match(/^(\w+)\s+([A-Za-z]+(?:\s*\([^)]*\))?)/);
-  return match ? { name: match[1], type: match[2].replace(/\s+/g, '').toUpperCase() } : { name: definition.trim().split(/\s+/)[0], type: 'UNKNOWN' };
+const tableConstraints = (rows) => rows.constraints || [];
+const constraintDefinition = (definition) => {
+  const normalized = definition.trim().replace(/^CONSTRAINT\s+\w+\s+/i, '');
+  let match = normalized.match(/^FOREIGN\s+KEY\s*\(([^)]+)\)\s+REFERENCES\s+(\w+)\s*\(([^)]+)\)/i);
+  if (match) return { type: 'FOREIGN KEY', columns: splitComma(match[1]), references: { table: match[2], columns: splitComma(match[3]) } };
+  match = normalized.match(/^PRIMARY\s+KEY\s*\(([^)]+)\)/i);
+  if (match) return { type: 'PRIMARY KEY', columns: splitComma(match[1]) };
+  match = normalized.match(/^UNIQUE\s*\(([^)]+)\)/i);
+  if (match) return { type: 'UNIQUE', columns: splitComma(match[1]) };
+  if (/^CHECK\s*\(/i.test(normalized)) return { type: 'CHECK', expression: normalized };
+  return null;
 };
-const rememberColumns = (rows, columns, columnTypes = {}) => { rows.columns = columns; rows.columnTypes = columnTypes; return rows; };
+const columnDefinition = (definition) => {
+  if (constraintDefinition(definition)) return null;
+  const match = definition.trim().match(/^(\w+)\s+([A-Za-z]+(?:\s*\([^)]*\))?)/);
+  if (!match) return null;
+  const inlineReference = definition.match(/\bREFERENCES\s+(\w+)\s*\(([^)]+)\)/i);
+  return {
+    name: match[1],
+    type: match[2].replace(/\s+/g, '').toUpperCase(),
+    constraint: inlineReference ? { type: 'FOREIGN KEY', columns: [match[1]], references: { table: inlineReference[1], columns: splitComma(inlineReference[2]) } } : null
+  };
+};
+const rememberColumns = (rows, columns, columnTypes = {}, constraints = []) => { rows.columns = columns; rows.columnTypes = columnTypes; rows.constraints = constraints; return rows; };
 const qualify = (row, alias) => Object.fromEntries([
   ...Object.entries(row), ...Object.entries(row).map(([key, value]) => [`${alias}.${key}`, value])
 ]);
@@ -79,7 +140,9 @@ function testCondition(row, raw) {
 
 function splitComma(text) {
   const result = []; let current = ''; let depth = 0; let quoted = false;
-  for (const char of text) {
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (char === "'" && text[i + 1] === "'") { current += char + text[i + 1]; i += 1; continue; }
     if (char === "'") quoted = !quoted;
     if (!quoted && char === '(') depth += 1;
     if (!quoted && char === ')') depth -= 1;
@@ -234,25 +297,33 @@ function executeSelect(sql, db) {
 
 function executeMutation(sql, db) {
   const next = structuredClone(db); let match;
-  if ((match = sql.match(/^INSERT\s+INTO\s+(\w+)\s*\((.*?)\)\s*VALUES\s*\((.*?)\)$/is))) {
+  if ((match = sql.match(/^INSERT\s+INTO\s+(\w+)(?:\s*\((.*?)\))?\s*VALUES\s+([\s\S]+)$/i))) {
     const table = findTable(next, match[1]); if (!table) throw new Error(`La tabla "${match[1]}" no existe.`);
-    const row = Object.fromEntries(splitComma(match[2]).map((key, i) => [key.trim(), unquote(splitComma(match[3])[i])]));
-    next[table].columns = [...new Set([...tableColumns(next[table]), ...Object.keys(row)])];
+    const columns = match[2] ? splitComma(match[2]).map((key) => key.trim()) : tableColumns(next[table]);
+    if (!columns.length) throw new Error(`INSERT sin lista de columnas necesita que la tabla "${table}" tenga columnas definidas.`);
+    const tuples = splitComma(match[3]).map((tuple) => {
+      const tupleMatch = tuple.match(/^\(([\s\S]*)\)$/);
+      if (!tupleMatch) throw new Error(`No pude interpretar la fila VALUES: ${tuple}`);
+      const values = splitComma(tupleMatch[1]).map(unquote);
+      if (values.length !== columns.length) throw new Error(`VALUES esperaba ${columns.length} valores y recibio ${values.length}.`);
+      return Object.fromEntries(columns.map((key, i) => [key, values[i]]));
+    });
+    next[table].columns = [...new Set([...tableColumns(next[table]), ...columns])];
     next[table].columnTypes = tableColumnTypes(next[table]);
-    next[table].push(row); return { db: next, result: [row], statement: 'INSERT', message: '1 fila insertada', steps: [step('TARGET', `Abrir ${table}`, 'La tabla destino se prepara para recibir una fila.', db[table], 'violet'), step('VALUES', 'Construir nueva fila', 'VALUES asigna cada dato a la columna correspondiente.', [row], 'amber'), step('INSERT', 'Insertar fila', 'El cambio vive solo durante esta sesion.', next[table], 'green')] };
+    next[table].push(...tuples); return { db: next, result: tuples, statement: 'INSERT', message: `${tuples.length} ${tuples.length === 1 ? 'fila insertada' : 'filas insertadas'}`, steps: [step('TARGET', `Abrir ${table}`, 'La tabla destino se prepara para recibir una o mas filas.', db[table], 'violet'), step('VALUES', 'Construir filas nuevas', 'VALUES asigna cada dato a su columna y permite multiples tuplas separadas por coma.', tuples, 'amber'), step('INSERT', 'Insertar filas', `${tuples.length} ${tuples.length === 1 ? 'registro nuevo queda' : 'registros nuevos quedan'} resaltados en verde dentro de la tabla.`, next[table], 'green', { kind: 'insert', addedRows: displayRows(tuples) })] };
   }
   if ((match = sql.match(/^UPDATE\s+(\w+)\s+SET\s+([\s\S]*?)(?:\s+WHERE\s+([\s\S]+))?$/i))) {
     const table = findTable(next, match[1]); if (!table) throw new Error(`La tabla "${match[1]}" no existe.`);
     const assignments = splitComma(match[2]).map((item) => item.match(/^(\w+)\s*=\s*(.+)$/)).filter(Boolean);
     const affected = [];
     const columns = [...new Set([...tableColumns(next[table]), ...assignments.map((a) => a[1])])];
-    next[table] = rememberColumns(next[table].map((row) => { if (match[3] && !testCondition(row, match[3])) return row; const changed = { ...row }; assignments.forEach((a) => { changed[a[1]] = unquote(a[2]); }); affected.push(changed); return changed; }), columns, tableColumnTypes(next[table]));
+    next[table] = rememberColumns(next[table].map((row) => { if (match[3] && !testCondition(row, match[3])) return row; const changed = { ...row }; assignments.forEach((a) => { changed[a[1]] = unquote(a[2]); }); affected.push(changed); return changed; }), columns, tableColumnTypes(next[table]), tableConstraints(next[table]));
     return { db: next, result: affected, statement: 'UPDATE', message: `${affected.length} filas actualizadas`, steps: [step('WHERE', 'Localizar filas', match[3] || 'Sin WHERE: se seleccionan todas las filas.', affected, 'amber'), step('SET', 'Aplicar cambios', match[2], affected, 'blue'), step('UPDATE', 'Tabla actualizada', 'El cambio no sale de este sandbox.', next[table], 'green')] };
   }
   if ((match = sql.match(/^DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+([\s\S]+))?$/i))) {
     const table = findTable(next, match[1]); if (!table) throw new Error(`La tabla "${match[1]}" no existe.`);
     const columns = tableColumns(next[table]);
-    const removed = next[table].filter((r) => !match[2] || testCondition(r, match[2])); next[table] = rememberColumns(next[table].filter((r) => match[2] && !testCondition(r, match[2])), columns, tableColumnTypes(next[table]));
+    const removed = next[table].filter((r) => !match[2] || testCondition(r, match[2])); next[table] = rememberColumns(next[table].filter((r) => match[2] && !testCondition(r, match[2])), columns, tableColumnTypes(next[table]), tableConstraints(next[table]));
     return { db: next, result: next[table], statement: 'DELETE', message: `${removed.length} filas eliminadas`, steps: [step('WHERE', 'Identificar filas', match[2] || 'Sin WHERE: todas las filas.', removed, 'amber'), step('DELETE', 'Eliminar seleccionadas', 'La tabla conserva las filas no coincidentes.', next[table], 'red')] };
   }
   throw new Error('Esta sentencia de modificacion aun no esta soportada. Prueba INSERT, UPDATE o DELETE simples.');
@@ -268,22 +339,27 @@ function executeDdl(sql, db) {
   if ((match = sql.match(/^CREATE\s+TABLE\s+(\w+)\s*\(([\s\S]+)\)$/i))) {
     target = match[1];
     if (findTable(next, target)) throw new Error(`La tabla "${target}" ya existe.`);
-    const definitions = splitComma(match[2]).map(columnDefinition);
+    const rawDefinitions = splitComma(match[2]);
+    const definitions = rawDefinitions.map(columnDefinition).filter(Boolean);
+    const constraints = [
+      ...rawDefinitions.map(constraintDefinition).filter(Boolean),
+      ...definitions.map((definition) => definition.constraint).filter(Boolean)
+    ];
     const columns = definitions.map((definition) => definition.name);
     const columnTypes = Object.fromEntries(definitions.map((definition) => [definition.name, definition.type]));
-    next[target] = rememberColumns([], columns, columnTypes);
+    next[target] = rememberColumns([], columns, columnTypes, constraints);
     detail = `Se crea la tabla temporal con columnas: ${columns.join(', ')}.`;
   } else if ((match = sql.match(/^ALTER\s+TABLE\s+(\w+)\s+ADD\s+(?:COLUMN\s+)?(\w+)(?:\s+[\w()]+)?(?:\s+DEFAULT\s+(.+))?$/i))) {
     target = findTable(next, match[1]);
     if (!target) throw new Error(`La tabla "${match[1]}" no existe.`);
     const initial = match[3] == null ? null : unquote(match[3]);
     const typeMatch = sql.match(/^ALTER\s+TABLE\s+\w+\s+ADD\s+(?:COLUMN\s+)?\w+\s+([\w]+(?:\([^)]*\))?)/i);
-    next[target] = rememberColumns(next[target].map((row) => ({ ...row, [match[2]]: initial })), [...new Set([...tableColumns(next[target]), match[2]])], { ...tableColumnTypes(next[target]), [match[2]]: typeMatch?.[1]?.toUpperCase() || 'UNKNOWN' });
+    next[target] = rememberColumns(next[target].map((row) => ({ ...row, [match[2]]: initial })), [...new Set([...tableColumns(next[target]), match[2]])], { ...tableColumnTypes(next[target]), [match[2]]: typeMatch?.[1]?.toUpperCase() || 'UNKNOWN' }, tableConstraints(next[target]));
     detail = `La columna ${match[2]} se agrega a todas las filas.`;
   } else if ((match = sql.match(/^ALTER\s+TABLE\s+(\w+)\s+DROP\s+COLUMN\s+(\w+)$/i))) {
     target = findTable(next, match[1]);
     if (!target) throw new Error(`La tabla "${match[1]}" no existe.`);
-    next[target] = rememberColumns(next[target].map((row) => Object.fromEntries(Object.entries(row).filter(([key]) => key.toLowerCase() !== match[2].toLowerCase()))), tableColumns(next[target]).filter((key) => key.toLowerCase() !== match[2].toLowerCase()), Object.fromEntries(Object.entries(tableColumnTypes(next[target])).filter(([key]) => key.toLowerCase() !== match[2].toLowerCase())));
+    next[target] = rememberColumns(next[target].map((row) => Object.fromEntries(Object.entries(row).filter(([key]) => key.toLowerCase() !== match[2].toLowerCase()))), tableColumns(next[target]).filter((key) => key.toLowerCase() !== match[2].toLowerCase()), Object.fromEntries(Object.entries(tableColumnTypes(next[target])).filter(([key]) => key.toLowerCase() !== match[2].toLowerCase())), tableConstraints(next[target]).filter((constraint) => !constraint.columns?.some((column) => column.toLowerCase() === match[2].toLowerCase())));
     detail = `La columna ${match[2]} se elimina del esquema temporal.`;
   } else if ((match = sql.match(/^DROP\s+TABLE\s+(\w+)$/i))) {
     target = findTable(next, match[1]);
@@ -293,7 +369,7 @@ function executeDdl(sql, db) {
   } else if ((match = sql.match(/^TRUNCATE\s+TABLE\s+(\w+)$/i))) {
     target = findTable(next, match[1]);
     if (!target) throw new Error(`La tabla "${match[1]}" no existe.`);
-    next[target] = rememberColumns([], tableColumns(next[target]), tableColumnTypes(next[target]));
+    next[target] = rememberColumns([], tableColumns(next[target]), tableColumnTypes(next[target]), tableConstraints(next[target]));
     detail = 'Todas las filas se eliminan sin borrar la tabla.';
   } else if ((match = sql.match(/^CREATE\s+VIEW\s+(\w+)\s+AS\s+(SELECT[\s\S]+)$/i))) {
     target = match[1];
@@ -319,4 +395,22 @@ export function executeSql(input, database) {
   const ddl = executeDdl(sql, database);
   if (ddl) return ddl;
   throw new Error('Comando no reconocido. Usa SELECT, INSERT, UPDATE, DELETE o una sentencia DDL basica.');
+}
+
+export function executeSqlScript(input, database) {
+  const statements = splitSqlStatements(input);
+  if (!statements.length) throw new Error('El archivo SQL no contiene sentencias ejecutables.');
+  let currentDb = database;
+  const results = [];
+  statements.forEach((statement, index) => {
+    try {
+      const result = executeSql(statement, currentDb);
+      currentDb = result.db;
+      results.push({ statement, result });
+    } catch (err) {
+      throw new Error(`Error en sentencia ${index + 1}: ${err.message}`);
+    }
+  });
+  const last = results.at(-1).result;
+  return { ...last, db: currentDb, importedStatements: statements.length, scriptResults: results };
 }

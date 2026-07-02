@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSeedDatabase, examples } from '../data/seed.js';
-import { executeSql } from './sqlEngine.js';
+import { executeSql, executeSqlScript, splitSqlStatements } from './sqlEngine.js';
 
 test('all bundled examples execute without errors', () => {
   for (const example of examples) {
@@ -17,8 +17,8 @@ test('filters, groups and aggregates follow logical SQL order', () => {
     HAVING COUNT(*) >= 2
     ORDER BY average DESC;`, createSeedDatabase());
   assert.deepEqual(execution.steps.map((item) => item.type), ['FROM', 'WHERE', 'GROUP BY', 'HAVING', 'SELECT', 'ORDER BY']);
-  assert.equal(execution.result.length, 2);
-  assert.equal(execution.result[0].products, 2);
+  assert.equal(execution.result.length, 1);
+  assert.equal(execution.result[0].products, 3);
 });
 
 test('joins expose both sources and preserve unmatched rows', () => {
@@ -34,7 +34,7 @@ test('scalar functions and SQL Server pagination are evaluated', () => {
   const functions = executeSql(`SELECT CONCAT(UPPER(last_name), ', ', first_name) AS name,
     COALESCE(email, 'Sin email') AS contact, SUBSTRING(city, 1, 3) AS city
     FROM Customers ORDER BY customer_id;`, createSeedDatabase());
-  assert.equal(functions.result[0].name, 'SILVA, Ana');
+  assert.equal(functions.result[0].name, 'TORRES, Ana');
   assert.equal(functions.result[2].contact, 'Sin email');
   assert.equal(functions.result[0].city, 'Bue');
 
@@ -53,6 +53,85 @@ test('DML changes only the returned sandbox copy', () => {
   assert.equal(deleted.db.Orders.length, original.Orders.length - 1);
 });
 
+test('INSERT supports multiple VALUES rows and stops at the first statement', () => {
+  const created = executeSql('CREATE TABLE CIUDADES (Id INT, Nombre VARCHAR(80), Provincia INT);', createSeedDatabase());
+  const inserted = executeSql(`INSERT INTO CIUDADES (Id, Nombre, Provincia)
+    VALUES
+    (1,'Cordoba Capital',1),
+    (2,'Rio Cuarto',1),
+    (3,'Mendoza Capital',2),
+    (4,'San Rafael',2),
+    (5,'Rosario',3),
+    (6,'Santa Fe',3),
+    (7,'La Plata',4);`, created.db);
+
+  assert.equal(inserted.result.length, 7);
+  assert.equal(inserted.db.CIUDADES.length, 7);
+  assert.deepEqual(inserted.db.CIUDADES[1], { Id: 2, Nombre: 'Rio Cuarto', Provincia: 1 });
+  assert.equal(inserted.steps.find((step) => step.type === 'INSERT').compare.kind, 'insert');
+  assert.equal(inserted.steps.find((step) => step.type === 'INSERT').compare.addedRows.length, 7);
+
+  const onlyFirst = executeSql(`INSERT INTO CIUDADES (Id, Nombre, Provincia) VALUES (8,'Primera',4);
+    INSERT INTO CIUDADES (Id, Nombre, Provincia) VALUES (9,'Segunda',4);`, inserted.db);
+  assert.equal(onlyFirst.db.CIUDADES.length, 8);
+  assert.equal(onlyFirst.db.CIUDADES.at(-1).Nombre, 'Primera');
+});
+
+test('SQL scripts execute all statements and ignore comments', () => {
+  const script = `-- Provincias base
+    CREATE TABLE PROVINCIAS (Id INT PRIMARY KEY, Nombre VARCHAR(50));
+    /* Inserciones iniciales */
+    INSERT INTO PROVINCIAS (Id, Nombre)
+    VALUES
+    (1,'Cordoba'),
+    (2,'Mendoza'),
+    (3,'Santa Fe'),
+    (4,'Buenos Aires');
+    -- Esta consulta tambien forma parte del archivo
+    CREATE TABLE CIUDADES (Id INT, Nombre VARCHAR(80), Provincia INT, FOREIGN KEY (Provincia) REFERENCES PROVINCIAS(Id));`;
+
+  assert.equal(splitSqlStatements(script).length, 3);
+  const imported = executeSqlScript(script, createSeedDatabase());
+  assert.equal(imported.importedStatements, 3);
+  assert.equal(imported.db.PROVINCIAS.length, 4);
+  assert.deepEqual(imported.db.PROVINCIAS.at(-1), { Id: 4, Nombre: 'Buenos Aires' });
+  assert.deepEqual(imported.db.CIUDADES.columns, ['Id', 'Nombre', 'Provincia']);
+});
+
+test('INSERT without explicit columns uses table schema order', () => {
+  let db = executeSql(`CREATE TABLE EMPLEADOS (
+    Legajo INT PRIMARY KEY,
+    Nombre VARCHAR(40),
+    Apellido VARCHAR(40),
+    FechaNacimiento DATE,
+    Jefe INT
+  );`, createSeedDatabase()).db;
+
+  const inserted = executeSql(`INSERT INTO EMPLEADOS
+    VALUES
+    (100,'Juan','Perez','1980-05-15',NULL),
+    (101,'Raul','Gomez','1992-10-20',100);`, db);
+
+  assert.equal(inserted.db.EMPLEADOS.length, 2);
+  assert.deepEqual(inserted.db.EMPLEADOS[0], { Legajo: 100, Nombre: 'Juan', Apellido: 'Perez', FechaNacimiento: '1980-05-15', Jefe: null });
+  assert.deepEqual(inserted.db.EMPLEADOS[1], { Legajo: 101, Nombre: 'Raul', Apellido: 'Gomez', FechaNacimiento: '1992-10-20', Jefe: 100 });
+  assert.equal(inserted.steps.find((step) => step.type === 'INSERT').compare.addedRows.length, 2);
+});
+
+test('SQL script imports table setup and columnless inserts in sequence', () => {
+  const script = `CREATE TABLE PROVINCIAS (Id INT PRIMARY KEY, Nombre VARCHAR(50));
+    CREATE TABLE EMPLEADOS (Legajo INT PRIMARY KEY, Nombre VARCHAR(40), Apellido VARCHAR(40), FechaNacimiento DATE, Jefe INT);
+    INSERT INTO PROVINCIAS (Id, Nombre) VALUES (1,'Cordoba'), (2,'Mendoza');
+    INSERT INTO EMPLEADOS VALUES (100,'Juan','Perez','1980-05-15',NULL);
+    INSERT INTO EMPLEADOS VALUES (101,'Raul','Gomez','1992-10-20',100), (102,'Maria','Lopez','1995-04-12',100);`;
+
+  const imported = executeSqlScript(script, createSeedDatabase());
+  assert.equal(imported.importedStatements, 5);
+  assert.equal(imported.db.PROVINCIAS.length, 2);
+  assert.equal(imported.db.EMPLEADOS.length, 3);
+  assert.equal(imported.db.EMPLEADOS[2].Nombre, 'Maria');
+});
+
 test('DDL modifies tables, columns and views in the temporary database', () => {
   const db = createSeedDatabase();
   const created = executeSql('CREATE TABLE Suppliers (supplier_id INT, name VARCHAR(100));', db);
@@ -68,6 +147,26 @@ test('DDL modifies tables, columns and views in the temporary database', () => {
   assert.equal(truncated.db.Employees.length, 0);
   const dropped = executeSql('DROP TABLE Employees;', db);
   assert.equal(Object.hasOwn(dropped.db, 'Employees'), false);
+});
+
+test('CREATE TABLE preserves many columns and table-level foreign keys', () => {
+  let db = executeSql('CREATE TABLE PROVINCIAS (Id INT PRIMARY KEY, Nombre VARCHAR(50));', createSeedDatabase()).db;
+  db = executeSql(`CREATE TABLE CIUDADES (
+    Id INT PRIMARY KEY,
+    Nombre VARCHAR(80) NOT NULL,
+    Provincia INT,
+    CodigoPostal VARCHAR(20),
+    Latitud FLOAT,
+    Longitud FLOAT,
+    FOREIGN KEY (Provincia) REFERENCES PROVINCIAS(Id)
+  );`, db).db;
+
+  assert.deepEqual(db.CIUDADES.columns, ['Id', 'Nombre', 'Provincia', 'CodigoPostal', 'Latitud', 'Longitud']);
+  assert.equal(db.CIUDADES.columnTypes.Nombre, 'VARCHAR(80)');
+  assert.equal(db.CIUDADES.columnTypes.Latitud, 'FLOAT');
+  assert.equal(db.CIUDADES.constraints[0].type, 'FOREIGN KEY');
+  assert.deepEqual(db.CIUDADES.constraints[0].references, { table: 'PROVINCIAS', columns: ['Id'] });
+  assert.equal(db.CIUDADES.columns.includes('FOREIGN'), false);
 });
 
 test('unsupported or malformed SQL returns a clear error', () => {

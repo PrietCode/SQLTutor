@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { concepts, createSeedDatabase, examples } from './data/seed';
-import { executeSql } from './lib/sqlEngine';
+import { executeSql, executeSqlScript } from './lib/sqlEngine';
 
 const Icon = ({ name, size = 18 }) => {
   const paths = {
@@ -15,7 +15,8 @@ const Icon = ({ name, size = 18 }) => {
     chevron: <><path d="m9 18 6-6-6-6" /></>,
     bulb: <><path d="M9 18h6M10 22h4M8.5 15.5a7 7 0 1 1 7 0c-.9.7-1.5 1.4-1.5 2.5h-4c0-1.1-.6-1.8-1.5-2.5Z" /></>,
     moon: <><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.7 6.7 0 0 0 9.8 9.8Z" /></>,
-    sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></>
+    sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></>,
+    upload: <><path d="M12 16V4" /><path d="m7 9 5-5 5 5" /><path d="M20 16.5V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3.5" /></>
   };
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 };
@@ -24,8 +25,18 @@ const rowSignature = (row) => JSON.stringify(Object.entries(row).filter(([key]) 
 
 function DataTable({ rows = [], compact = false, faded = false, compare = null }) {
   const currentRows = rows.map((row) => ({ ...row, __diffStatus: 'kept' }));
+  if (compare?.kind === 'insert') {
+    const addedCounts = new Map((compare.addedRows || []).map((row) => [rowSignature(row), 0]));
+    (compare.addedRows || []).forEach((row) => addedCounts.set(rowSignature(row), (addedCounts.get(rowSignature(row)) || 0) + 1));
+    for (let i = currentRows.length - 1; i >= 0; i -= 1) {
+      const signature = rowSignature(currentRows[i]);
+      const count = addedCounts.get(signature) || 0;
+      if (count > 0) { currentRows[i].__diffStatus = 'added'; addedCounts.set(signature, count - 1); }
+    }
+  }
   const currentSignatures = new Set(rows.map(rowSignature));
   const removedRows = compare?.kind === 'filter' ? (compare.beforeRows || []).filter((row) => !currentSignatures.has(rowSignature(row))).map((row) => ({ ...row, __diffStatus: 'removed' })) : [];
+  const addedRowCount = currentRows.filter((row) => row.__diffStatus === 'added').length;
   const visualRows = [...currentRows, ...removedRows];
   const addedColumns = new Set(compare?.kind === 'join' ? compare.addedColumns || [] : []);
   const columns = [...new Set(visualRows.flatMap((row) => Object.keys(row).filter((key) => !key.startsWith('__'))))].slice(0, compact ? 5 : 8);
@@ -33,10 +44,10 @@ function DataTable({ rows = [], compact = false, faded = false, compare = null }
   return <div className={`table-wrap ${faded ? 'faded' : ''}`}>
     <table className={compact ? 'compact-table' : ''}>
       <thead><tr>{columns.map((column) => <th className={addedColumns.has(column) ? 'added-column' : ''} key={column}>{column}</th>)}</tr></thead>
-      <tbody>{visualRows.slice(0, compact ? 6 : 10).map((row, index) => <tr className={row.__diffStatus === 'removed' ? 'removed-row' : ''} key={index}>{columns.map((column) => <td className={addedColumns.has(column) ? 'added-column' : ''} key={column}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>)}</tbody>
+      <tbody>{visualRows.slice(0, compact ? 6 : 10).map((row, index) => <tr className={row.__diffStatus === 'removed' ? 'removed-row' : row.__diffStatus === 'added' ? 'added-row' : ''} key={index}>{columns.map((column) => <td className={addedColumns.has(column) ? 'added-column' : ''} key={column}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>)}</tbody>
     </table>
     {visualRows.length > (compact ? 6 : 10) && <span className="more-rows">+ {visualRows.length - (compact ? 6 : 10)} filas</span>}
-    {(removedRows.length > 0 || addedColumns.size > 0) && <div className="comparison-legend">{removedRows.length > 0 && <span><i className="legend-dot removed" />filas recortadas</span>}{addedColumns.size > 0 && <span><i className="legend-dot added" />columnas agregadas</span>}</div>}
+    {(removedRows.length > 0 || addedColumns.size > 0 || addedRowCount > 0) && <div className="comparison-legend">{removedRows.length > 0 && <span><i className="legend-dot removed" />filas recortadas</span>}{addedColumns.size > 0 && <span><i className="legend-dot added" />columnas agregadas</span>}{addedRowCount > 0 && <span><i className="legend-dot added" />filas agregadas</span>}</div>}
   </div>;
 }
 
@@ -137,6 +148,7 @@ function SchemaPanel({ database, setDatabase, open, onClose }) {
     {selectedTable && database[selectedTable] && (() => {
       const rows = database[selectedTable];
       const columns = rows.length > 0 ? Object.keys(rows[0]) : (rows.columns || []);
+      const foreignKeys = (rows.constraints || []).filter((constraint) => constraint.type === 'FOREIGN KEY');
       return <div className="table-detail-overlay" role="dialog" aria-modal="true" aria-label={`Detalle de tabla ${selectedTable}`}>
         <div className="table-detail-modal">
           <button className="detail-close-btn" onClick={() => setSelectedTable(null)} aria-label="Cerrar detalle"><Icon name="close" /></button>
@@ -145,12 +157,18 @@ function SchemaPanel({ database, setDatabase, open, onClose }) {
             <span className="result-badge">{rows.length} {rows.length === 1 ? 'fila' : 'filas'}</span>
           </div>
           <div className="detail-grid">
-            <section className="detail-card">
-              <h3>Columnas</h3>
-              <div className="detail-columns">
-                {columns.length ? columns.map((column, index) => <div key={column} className="detail-column-row"><span className={index === 0 ? 'key-dot' : 'column-dot'}>{index === 0 ? 'PK' : ''}</span><strong>{column}</strong><em>{columnTypeLabel(rows, column)}</em></div>) : <p className="muted">Sin columnas definidas.</p>}
-              </div>
-            </section>
+            <div className="detail-side">
+              <section className="detail-card">
+                <h3>Columnas</h3>
+                <div className="detail-columns">
+                  {columns.length ? columns.map((column, index) => <div key={column} className="detail-column-row"><span className={index === 0 ? 'key-dot' : 'column-dot'}>{index === 0 ? 'PK' : ''}</span><strong>{column}</strong><em>{columnTypeLabel(rows, column)}</em></div>) : <p className="muted">Sin columnas definidas.</p>}
+                </div>
+              </section>
+              <section className="detail-card">
+                <h3>Detalles</h3>
+                {foreignKeys.length ? <div className="fk-list">{foreignKeys.map((fk, index) => <div className="fk-row" key={index}><strong>{fk.columns.join(', ')}</strong><span>es clave foránea de <b>{fk.references.table}</b> ({fk.references.columns.join(', ')})</span></div>)}</div> : <p className="muted">No hay claves foráneas declaradas para esta tabla.</p>}
+              </section>
+            </div>
             <section className="detail-card records-detail-card">
               <h3>Registros actuales</h3>
               {columns.length ? <div className="detail-table-wrap"><table><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{columns.map((column) => <td key={column}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>) : <tr><td colSpan={columns.length}>Tabla vacía: todavía no hay registros.</td></tr>}</tbody></table></div> : <div className="no-records-note">No hay columnas para mostrar.</div>}
@@ -172,13 +190,20 @@ function SchemaPanel({ database, setDatabase, open, onClose }) {
 
 const queryKeywords = (sql) => sql.match(/\b(?:SELECT|FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL JOIN|JOIN|WHERE|GROUP BY|HAVING|ORDER BY|OFFSET|FETCH|VALUES|SET|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE|DROP TABLE|TRUNCATE TABLE|CREATE INDEX|CREATE VIEW)\b/gi) || [];
 
-function Editor({ sql, setSql, onRun, onStep, onReset, selectedExample, setSelectedExample, error, activeClause }) {
+function Editor({ sql, setSql, onRun, onStep, onReset, onImportSqlFile, selectedExample, setSelectedExample, error, importMessage, activeClause }) {
   const textarea = useRef(null);
+  const fileInput = useRef(null);
   const lineCount = sql.split('\n').length;
+  const handleFile = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    await onImportSqlFile(await file.text(), file.name);
+    event.target.value = '';
+  };
   return <section className="editor-card">
     <div className="editor-toolbar">
       <div><span className="status-dot" /><strong>Editor SQL</strong><span className="dialect">SQL Server compatible</span></div>
-      <div className="example-picker"><label htmlFor="examples">Ejemplo</label><select id="examples" value={selectedExample} onChange={(e) => setSelectedExample(e.target.value)}>{examples.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></div>
+      <div className="editor-toolbar-tools"><button className="import-file-button" onClick={() => fileInput.current?.click()}><Icon name="upload" /> Importar .sql</button><input ref={fileInput} type="file" accept=".sql,text/sql,.txt" hidden onChange={handleFile} /><div className="example-picker"><label htmlFor="examples">Ejemplo</label><select id="examples" value={selectedExample} onChange={(e) => setSelectedExample(e.target.value)}><option value="">Seleccionar</option>{examples.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></div></div>
     </div>
     <div className="code-editor">
       <div className="line-numbers">{Array.from({ length: lineCount }, (_, i) => <span key={i}>{i + 1}</span>)}</div>
@@ -192,6 +217,7 @@ function Editor({ sql, setSql, onRun, onStep, onReset, selectedExample, setSelec
       })}
     </div>
     {error && <div className="error-message"><strong>No se pudo ejecutar.</strong> {error}</div>}
+    {importMessage && <div className="success-message"><strong>Archivo SQL importado.</strong> {importMessage}</div>}
     <div className="editor-footer">
       <span className="shortcut"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> para ejecutar</span>
       <div className="actions"><button className="ghost-button" onClick={() => setSql(examples.find((item) => item.id === selectedExample)?.sql || sql)}>Cargar ejemplo</button><button className="ghost-button" onClick={onReset}><Icon name="reset" /> Reset</button><button className="secondary-button" onClick={onStep}><Icon name="steps" /> Paso a paso</button><button className="primary-button" onClick={onRun}><Icon name="play" /> Ejecutar</button></div>
@@ -333,12 +359,13 @@ function Library({ open, onClose }) {
 
 export default function App() {
   const [database, setDatabase] = useState(createSeedDatabase);
-  const [selectedExample, setSelectedExample] = useState('where');
-  const [sql, setSql] = useState(examples.find((e) => e.id === 'where').sql);
+  const [selectedExample, setSelectedExample] = useState('');
+  const [sql, setSql] = useState('');
   const [execution, setExecution] = useState(null);
   const [activeStep, setActiveStep] = useState(0);
   const [showAll, setShowAll] = useState(true);
   const [error, setError] = useState('');
+  const [importMessage, setImportMessage] = useState('');
   const [history, setHistory] = useState([]);
   const [tab, setTab] = useState('explain');
   const [schemaOpen, setSchemaOpen] = useState(false);
@@ -346,21 +373,29 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(false);
   const timer = useRef();
 
-  useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); } }, [selectedExample]);
+  useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); setImportMessage(''); } else if (!selectedExample) { setSql(''); setError(''); } }, [selectedExample]);
   useEffect(() => () => clearInterval(timer.current), []);
   const run = (stepMode = false) => {
     clearInterval(timer.current);
     try {
-      const next = executeSql(sql, database); setExecution(next); setDatabase(next.db); setError(''); setActiveStep(0); setShowAll(!stepMode); setTab('explain');
+      const next = executeSql(sql, database); setExecution(next); setDatabase(next.db); setError(''); setImportMessage(''); setActiveStep(0); setShowAll(!stepMode); setTab('explain');
       setHistory((items) => [{ sql, time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) }, ...items.filter((x) => x.sql !== sql)].slice(0, 8));
-    } catch (err) { setError(err.message); setExecution(null); }
+    } catch (err) { setError(err.message); setImportMessage(''); setExecution(null); }
   };
-  const reset = () => { clearInterval(timer.current); setDatabase(createSeedDatabase()); setExecution(null); setError(''); setActiveStep(0); setHistory([]); setSelectedExample('where'); };
+  const importSqlFile = async (content, fileName) => {
+    clearInterval(timer.current);
+    try {
+      const next = executeSqlScript(content, database);
+      setDatabase(next.db); setExecution(null); setError(''); setActiveStep(0); setShowAll(true); setTab('explain');
+      setImportMessage(`${fileName}: ${next.importedStatements} sentencias ejecutadas sobre la base local.`);
+    } catch (err) { setError(err.message); setImportMessage(''); }
+  };
+  const reset = () => { clearInterval(timer.current); setDatabase(createSeedDatabase()); setExecution(null); setError(''); setImportMessage(''); setActiveStep(0); setHistory([]); setSelectedExample(''); setSql(''); };
   const activeResult = useMemo(() => execution?.steps[activeStep]?.rows || [], [execution, activeStep]);
 
   return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
     <header className="topbar"><a className="brand" href="#top"><span className="brand-mark"><Icon name="database" /></span><span>SQL <strong>Journey</strong><small>Visual query explorer</small></span></a><nav><button className="mobile-only-flex" onClick={() => setSchemaOpen(true)}><Icon name="database" /> Datos</button><button onClick={() => setLibraryOpen(true)}><Icon name="book" /> Biblioteca SQL</button></nav><div className="header-actions"><button className="theme-toggle" onClick={() => setDarkMode((value) => !value)} aria-label={darkMode ? 'Activar modo claro' : 'Activar modo oscuro'} title={darkMode ? 'Modo claro' : 'Modo oscuro'}><Icon name={darkMode ? 'sun' : 'moon'} /></button><div className="session-pill"><span /> Sesión temporal</div></div></header>
-    <main id="top"><SchemaPanel database={database} setDatabase={setDatabase} open={schemaOpen} onClose={() => setSchemaOpen(false)} /><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, selectedExample, setSelectedExample, error }} activeClause={execution?.steps[activeStep]?.type || ''} onRun={() => run(false)} onStep={() => run(true)} onReset={reset} /><StepControllerCard {...{ execution, activeStep, setActiveStep, showAll, setShowAll }} onStep={() => run(true)} /></div><div className="content-grid"><Journey {...{ execution, activeStep, setActiveStep, showAll, sql }} /><ExplainPanel {...{ execution, activeStep, tab, setTab, history }} onHistory={(value) => { setSql(value); setTab('explain'); }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div></main>
+    <main id="top"><SchemaPanel database={database} setDatabase={setDatabase} open={schemaOpen} onClose={() => setSchemaOpen(false)} /><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, selectedExample, setSelectedExample, error, importMessage }} activeClause={execution?.steps[activeStep]?.type || ''} onImportSqlFile={importSqlFile} onRun={() => run(false)} onStep={() => run(true)} onReset={reset} /><StepControllerCard {...{ execution, activeStep, setActiveStep, showAll, setShowAll }} onStep={() => run(true)} /></div><div className="content-grid"><Journey {...{ execution, activeStep, setActiveStep, showAll, sql }} /><ExplainPanel {...{ execution, activeStep, tab, setTab, history }} onHistory={(value) => { setSql(value); setTab('explain'); }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div></main>
     <footer className="app-footer">
       <div className="footer-main"><span>Página realizada por <strong>Prieto Agustin</strong></span><span>Alumno UTNFRC</span><span className="footer-badge">Fase de Pruebas</span></div>
       <p className="footer-legal">Copyright © 2026 Prieto Agustin. Todos los derechos reservados. Uso educativo autorizado. Prohibida la copia, redistribución o explotación comercial sin permiso.</p>
