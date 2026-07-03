@@ -263,6 +263,105 @@ test('nested subqueries', () => {
   assert.equal(result.result.length, 6);
 });
 
+test('DISTINCT runs after SELECT and before ORDER BY', () => {
+  const result = executeSql('SELECT DISTINCT city FROM Customers ORDER BY city;', createSeedDatabase());
+  assert.deepEqual(result.steps.map((step) => step.type), ['FROM', 'SELECT', 'DISTINCT', 'ORDER BY']);
+  assert.deepEqual(result.result.map((row) => row.city), ['Buenos Aires', 'Cordoba', 'Mendoza', 'Rosario']);
+});
+
+test('DATE filters run before SUM and COUNT aggregates', () => {
+  const script = `CREATE TABLE VENTAS (
+    Nro_Ticket INT PRIMARY KEY,
+    Modelo VARCHAR(100),
+    Marca VARCHAR(100),
+    Cod_forma_pago INT,
+    Legajo_vend INT,
+    Fecha DATE,
+    Monto DECIMAL(10,2),
+    Tipo_doc_cli VARCHAR(10),
+    Nro_doc_cli VARCHAR(20)
+  );
+  INSERT INTO VENTAS VALUES
+    (1,'A','X',1,10,'2021-12-31',20,'DNI','1'),
+    (2,'A','X',1,10,'2022-01-01',100,'DNI','2'),
+    (3,'B','Y',2,11,'2022-06-15',250,'DNI','3'),
+    (4,'C','Z',2,12,'2022-12-31',150,'DNI','4'),
+    (5,'D','Z',2,12,'2023-01-01',500,'DNI','5');
+  SELECT SUM(V.Monto) AS "Monto Total", COUNT(*) AS "Cantidad Ventas 2022"
+  FROM VENTAS V
+  WHERE V.Fecha >= '1/1/2022' AND V.Fecha < '1/1/2023';`;
+
+  const result = executeSqlScript(script, createSeedDatabase());
+  assert.deepEqual(result.result, [{ 'Monto Total': 500, 'Cantidad Ventas 2022': 3 }]);
+  assert.equal(result.steps.find((step) => step.type === 'WHERE').count, 3);
+  assert.equal(result.steps.find((step) => step.type === 'FROM').rows.length, 5);
+  assert.ok(Object.hasOwn(result.steps.find((step) => step.type === 'FROM').rows[0], 'Fecha'));
+  assert.ok(Object.hasOwn(result.steps.find((step) => step.type === 'FROM').rows[0], 'Monto'));
+});
+
+test('step rows preserve all available rows for visual expansion', () => {
+  let db = executeSql('CREATE TABLE TICKETS (Id INT PRIMARY KEY, Fecha DATE, Monto DECIMAL(10,2));', createSeedDatabase()).db;
+  const values = Array.from({ length: 15 }, (_, index) => `(${index + 1},'2022-01-${String(index + 1).padStart(2, '0')}',${index + 1})`).join(',');
+  db = executeSql(`INSERT INTO TICKETS VALUES ${values};`, db).db;
+  const result = executeSql('SELECT COUNT(*) AS "Cantidad Tickets" FROM TICKETS WHERE Fecha >= \'1/1/2022\' AND Fecha < \'1/2/2022\';', db);
+  assert.equal(result.result[0]['Cantidad Tickets'], 15);
+  assert.equal(result.steps.find((step) => step.type === 'FROM').rows.length, 15);
+  assert.equal(result.steps.find((step) => step.type === 'WHERE').rows.length, 15);
+});
+
+test('NULL comparisons follow SQL three-valued logic', () => {
+  const db = createSeedDatabase();
+  assert.equal(executeSql('SELECT first_name FROM Customers WHERE email = NULL;', db).result.length, 0);
+  assert.equal(executeSql('SELECT first_name FROM Customers WHERE email != NULL;', db).result.length, 0);
+  assert.equal(executeSql('SELECT first_name FROM Customers WHERE email IN (NULL);', db).result.length, 0);
+  assert.equal(executeSql('SELECT first_name FROM Customers WHERE email NOT IN (NULL);', db).result.length, 0);
+  assert.equal(executeSql('SELECT first_name FROM Customers WHERE email IS NULL;', db).result.length, 2);
+});
+
+test('multi-table queries reject ambiguous or implicit joins', () => {
+  const db = createSeedDatabase();
+  assert.throws(() => executeSql('SELECT customer_id FROM Customers c INNER JOIN Orders o ON c.customer_id = o.customer_id;', db), /ambiguo/);
+  assert.throws(() => executeSql('SELECT * FROM Customers, Orders;', db), /JOIN explicito/);
+  assert.throws(() => executeSql('SELECT * FROM Customers JOIN Orders;', db), /condicion explicita con ON/);
+});
+
+test('RIGHT JOIN preserves unmatched right rows with NULL left columns', () => {
+  let db = executeSql('CREATE TABLE L (Id INT PRIMARY KEY, Val VARCHAR(20));', createSeedDatabase()).db;
+  db = executeSql("INSERT INTO L VALUES (1,'uno');", db).db;
+  db = executeSql('CREATE TABLE R (Id INT PRIMARY KEY, LId INT);', db).db;
+  db = executeSql('INSERT INTO R VALUES (10,2);', db).db;
+  const result = executeSql('SELECT l.Val, r.Id FROM L l RIGHT JOIN R r ON l.Id = r.LId;', db);
+  assert.deepEqual(result.result, [{ Val: null, Id: 10 }]);
+});
+
+test('GROUP BY rejects non-grouped non-aggregate columns', () => {
+  assert.throws(() => executeSql('SELECT category_id, name FROM Products GROUP BY category_id;', createSeedDatabase()), /GROUP BY/);
+  assert.throws(() => executeSql('SELECT category_id, COUNT(*) AS total FROM Products;', createSeedDatabase()), /funcion de agregado/);
+});
+
+test('seed database enforces PK and FK constraints', () => {
+  const db = createSeedDatabase();
+  assert.throws(() => executeSql("INSERT INTO Orders (order_id, customer_id, total, status, order_date) VALUES (101, 1, 10, 'x', '2026-01-01');", db), /PRIMARY KEY/);
+  assert.throws(() => executeSql("INSERT INTO Orders (order_id, customer_id, total, status, order_date) VALUES (200, 999, 10, 'x', '2026-01-01');", db), /FOREIGN KEY/);
+});
+
+test('UPDATE and DELETE preserve relational integrity', () => {
+  let db = executeSql('CREATE TABLE P (Id INT PRIMARY KEY);', createSeedDatabase()).db;
+  db = executeSql('CREATE TABLE C (Id INT PRIMARY KEY, PId INT, FOREIGN KEY (PId) REFERENCES P(Id));', db).db;
+  db = executeSql('INSERT INTO P VALUES (1);', db).db;
+  db = executeSql('INSERT INTO C VALUES (10,1);', db).db;
+  assert.throws(() => executeSql('UPDATE P SET Id = NULL WHERE Id = 1;', db), /NULL/);
+  assert.throws(() => executeSql('UPDATE C SET PId = 99 WHERE Id = 10;', db), /FOREIGN KEY/);
+  assert.throws(() => executeSql('DELETE FROM P WHERE Id = 1;', db), /FOREIGN KEY/);
+});
+
+test('DML and DDL reject unknown columns and invalid foreign keys', () => {
+  assert.throws(() => executeSql('INSERT INTO Products (missing) VALUES (1);', createSeedDatabase()), /no existe/);
+  assert.throws(() => executeSql('UPDATE Products SET missing = 1;', createSeedDatabase()), /no existe/);
+  assert.throws(() => executeSql('CREATE TABLE BadChild (Id INT PRIMARY KEY, ParentId INT, FOREIGN KEY (ParentId) REFERENCES Missing(Id));', createSeedDatabase()), /referenciada/);
+  assert.throws(() => executeSql('CREATE TABLE BadRef (Id INT PRIMARY KEY, ParentName VARCHAR(80), FOREIGN KEY (ParentName) REFERENCES Categories(name));', createSeedDatabase()), /PRIMARY KEY o UNIQUE/);
+});
+
 test('unsupported or malformed SQL returns a clear error', () => {
   assert.throws(() => executeSql('MERGE Products;', createSeedDatabase()), /Comando no reconocido/);
   assert.throws(() => executeSql('SELECT * FROM Missing;', createSeedDatabase()), /no existe/);

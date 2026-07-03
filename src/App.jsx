@@ -57,12 +57,7 @@ function DataTable({ rows = [], compact = false, faded = false, compare = null }
   const visualRows = [...currentRows, ...removedRows];
   const addedColumns = new Set(compare?.kind === 'join' ? compare.addedColumns || [] : []);
   const allColumnNames = [...new Set(visualRows.flatMap((row) => Object.keys(row).filter((key) => !key.startsWith('__'))))];
-  const baseLimit = compact ? 5 : 8;
-  let columns = allColumnNames.slice(0, baseLimit);
-  if (addedColumns.size) {
-    const missing = [...addedColumns].filter(col => !columns.includes(col));
-    columns = [...columns, ...missing];
-  }
+  const columns = allColumnNames;
   if (!visualRows.length) return <div className="empty-table">Sin filas en esta etapa</div>;
   const limit = compact ? 6 : 10;
   const hasExtra = visualRows.length > limit;
@@ -72,7 +67,7 @@ function DataTable({ rows = [], compact = false, faded = false, compare = null }
       <thead><tr>{columns.map((column) => <th className={addedColumns.has(column) ? 'added-column' : compare?.comparedColumn === column ? 'compared-column' : ''} key={column}>{column}</th>)}</tr></thead>
       <tbody>{(expanded ? visualRows : visualRows.slice(0, limit)).map((row, index) => <tr className={row.__diffStatus === 'removed' ? 'removed-row' : row.__diffStatus === 'added' ? 'added-row' : ''} key={index}>{columns.map((column) => <td key={column} className={addedColumns.has(column) ? 'added-column' : compare?.comparedColumn === column ? 'compared-column' : ''}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>)}</tbody>
     </table>
-    {hasExtra && <button className="more-rows-btn" onClick={() => setExpanded(!expanded)}>{expanded ? <><span className="collapse-circle">−</span> ocultar</> : <span>+ {visualRows.length - limit} filas</span>}</button>}
+    {hasExtra && <button className="more-rows-btn" onClick={(event) => { event.stopPropagation(); setExpanded(!expanded); }}>{expanded ? <><span className="collapse-circle">−</span> ocultar</> : <span>+ {visualRows.length - limit} filas</span>}</button>}
     {hasAddRemove && <div className="comparison-legend">{removedRows.length > 0 && <span><i className="legend-dot removed" />filas recortadas</span>}{addedColumns.size > 0 && <span><i className="legend-dot added" />columnas agregadas</span>}{addedRowCount > 0 && <span><i className="legend-dot added" />filas agregadas</span>}</div>}
   </div>;
 }
@@ -214,7 +209,7 @@ function SchemaPanel({ database, setDatabase, open, onClose }) {
   </aside>;
 }
 
-const queryKeywords = (sql) => sql.match(/\b(?:SELECT|FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL JOIN|JOIN|WHERE|GROUP BY|HAVING|ORDER BY|OFFSET|FETCH|VALUES|SET|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE|DROP TABLE|TRUNCATE TABLE|CREATE INDEX|CREATE VIEW)\b/gi) || [];
+const queryKeywords = (sql) => sql.match(/\b(?:SELECT|DISTINCT|FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL JOIN|JOIN|WHERE|GROUP BY|HAVING|ORDER BY|OFFSET|FETCH|VALUES|SET|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE|DROP TABLE|TRUNCATE TABLE|CREATE INDEX|CREATE VIEW)\b/gi) || [];
 
 function Editor({ sql, setSql, onRun, onStep, onReset, onImportSqlFile, selectedExample, setSelectedExample, error, importMessage, activeClause }) {
   const textarea = useRef(null);
@@ -326,9 +321,9 @@ function ExplainPanel({ execution, activeStep, tab, setTab, history, onHistory }
   </aside>;
 }
 
-const explanationFor = (type) => ({ FROM: 'El motor localiza la fuente y crea el conjunto inicial.', JOIN: 'Compara la condición ON fila por fila y combina coincidencias.', WHERE: 'Evalúa la condición para cada fila; solo las verdaderas continúan.', 'GROUP BY': 'Construye una colección por cada combinación única de claves.', HAVING: 'Evalúa agregados de cada grupo y descarta los que no cumplen.', SELECT: 'Calcula expresiones y proyecta únicamente las columnas pedidas.', 'ORDER BY': 'Compara valores y reordena el conjunto ya proyectado.', VALUES: 'Relaciona cada valor con su columna por posición.', SET: 'Asigna los nuevos valores en las filas seleccionadas.' }[type] || 'El motor valida la instrucción y aplica la transformación sobre el estado temporal.');
-const exampleFor = (type) => ({ FROM: 'FROM Products', SOURCE: 'LEFT JOIN Orders o ON ...', JOIN: 'INNER JOIN Orders o ON c.id = o.customer_id', WHERE: 'WHERE price BETWEEN 10 AND 50', 'GROUP BY': 'GROUP BY category_id', HAVING: 'HAVING COUNT(*) >= 2', SELECT: 'SELECT name, AVG(price)', 'ORDER BY': 'ORDER BY price DESC', LIMIT: 'OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY', VALUES: "VALUES (4, 'Books')", SET: 'SET stock = 10', INSERT: 'INSERT INTO Categories (...)', UPDATE: 'UPDATE Products SET ...', DELETE: 'DELETE FROM Orders WHERE ...', PARSE: 'CREATE TABLE Suppliers (...)' }[type] || `${type} ...`);
-const noteFor = (type) => type === 'LIMIT' ? 'SQL Server usa TOP o OFFSET ... FETCH en lugar de LIMIT.' : type === 'WHERE' ? 'WHERE no filtra agregados; para eso se usa HAVING.' : type === 'SELECT' ? 'Aunque se escribe primero, SELECT se resuelve después de FROM, WHERE y GROUP BY.' : 'La simulación sigue el orden lógico, que puede diferir del orden escrito.';
+const explanationFor = (type) => ({ FROM: 'El motor localiza la fuente y crea el conjunto inicial.', JOIN: 'Compara la condición ON fila por fila y combina coincidencias.', WHERE: 'Evalúa la condición para cada fila; solo las verdaderas continúan.', 'GROUP BY': 'Construye una colección por cada combinación única de claves.', HAVING: 'Evalúa agregados de cada grupo y descarta los que no cumplen.', SELECT: 'Calcula expresiones y proyecta únicamente las columnas pedidas.', DISTINCT: 'Elimina filas duplicadas del resultado ya proyectado.', 'ORDER BY': 'Compara valores y reordena el conjunto ya proyectado.', VALUES: 'Relaciona cada valor con su columna por posición.', SET: 'Asigna los nuevos valores en las filas seleccionadas.' }[type] || 'El motor valida la instrucción y aplica la transformación sobre el estado temporal.');
+const exampleFor = (type) => ({ FROM: 'FROM Products', SOURCE: 'LEFT JOIN Orders o ON ...', JOIN: 'INNER JOIN Orders o ON c.id = o.customer_id', WHERE: 'WHERE price BETWEEN 10 AND 50', 'GROUP BY': 'GROUP BY category_id', HAVING: 'HAVING COUNT(*) >= 2', SELECT: 'SELECT name, AVG(price)', DISTINCT: 'SELECT DISTINCT city', 'ORDER BY': 'ORDER BY price DESC', LIMIT: 'OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY', VALUES: "VALUES (4, 'Books')", SET: 'SET stock = 10', INSERT: 'INSERT INTO Categories (...)', UPDATE: 'UPDATE Products SET ...', DELETE: 'DELETE FROM Orders WHERE ...', PARSE: 'CREATE TABLE Suppliers (...)' }[type] || `${type} ...`);
+const noteFor = (type) => type === 'LIMIT' ? 'SQL Server usa TOP o OFFSET ... FETCH en lugar de LIMIT.' : type === 'WHERE' ? 'WHERE no filtra agregados; para eso se usa HAVING.' : type === 'SELECT' ? 'Aunque se escribe primero, SELECT se resuelve después de FROM, WHERE y GROUP BY.' : type === 'DISTINCT' ? 'DISTINCT se aplica despues de construir la lista SELECT y antes del ordenamiento final.' : 'La simulación sigue el orden lógico, que puede diferir del orden escrito.';
 
 function Library({ open, onClose }) {
   const [search, setSearch] = useState('');
@@ -352,14 +347,16 @@ export default function App() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const timer = useRef();
+  const databaseRef = useRef(database);
 
   useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); setImportMessage(''); } }, [selectedExample]);
+  useEffect(() => { databaseRef.current = database; }, [database]);
   useEffect(() => () => clearInterval(timer.current), []);
   const run = (startStep = false) => {
     clearInterval(timer.current);
     try {
       if (!hasTerminatingSemicolon(sql)) throw new Error('La sentencia SQL debe finalizar con punto y coma (;).');
-      const next = executeSql(sql, database); setExecution(next); setDatabase(next.db); setError(''); setImportMessage(''); setActiveStep(0); setShowAll(!startStep); setStepMode(startStep); setTab('explain');
+      const next = executeSql(sql, databaseRef.current); databaseRef.current = next.db; setExecution(next); setDatabase(next.db); setError(''); setImportMessage(''); setActiveStep(0); setShowAll(!startStep); setStepMode(startStep); setTab('explain');
       setHistory((items) => [{ sql, time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) }, ...items.filter((x) => x.sql !== sql)].slice(0, 8));
     } catch (err) { setError(err.message); setImportMessage(''); setExecution(null); }
   };
@@ -372,12 +369,12 @@ export default function App() {
     clearInterval(timer.current);
     try {
       if (!hasTerminatingSemicolon(content)) throw new Error('El archivo SQL debe finalizar cada sentencia con punto y coma (;).');
-      const next = executeSqlScript(content, database);
-      setDatabase(next.db); setExecution(null); setError(''); setActiveStep(0); setShowAll(true); setTab('explain');
+      const next = executeSqlScript(content, databaseRef.current);
+      databaseRef.current = next.db; setDatabase(next.db); setExecution(null); setError(''); setActiveStep(0); setShowAll(true); setTab('explain');
       setImportMessage(`${fileName}: ${next.importedStatements} sentencias ejecutadas sobre la base local.`);
     } catch (err) { setError(err.message); setImportMessage(''); }
   };
-  const reset = () => { clearInterval(timer.current); setDatabase(createSeedDatabase()); setExecution(null); setError(''); setImportMessage(''); setActiveStep(0); setHistory([]); setSelectedExample(''); setSql(''); };
+  const reset = () => { clearInterval(timer.current); const initial = createSeedDatabase(); databaseRef.current = initial; setDatabase(initial); setExecution(null); setError(''); setImportMessage(''); setActiveStep(0); setHistory([]); setSelectedExample(''); setSql(''); };
   const activeResult = useMemo(() => execution?.steps[activeStep]?.rows || [], [execution, activeStep]);
 
   return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
