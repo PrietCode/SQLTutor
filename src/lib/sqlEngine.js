@@ -107,7 +107,7 @@ function splitLogic(expression, operator) {
 }
 
 function testCondition(row, raw) {
-  let expr = raw.trim();
+  let expr = raw.trim().replace(/\s+/g, ' ');
   while (expr.startsWith('(') && expr.endsWith(')')) expr = expr.slice(1, -1).trim();
   const or = splitLogic(expr, 'OR');
   if (or) return testCondition(row, or[0]) || testCondition(row, or[1]);

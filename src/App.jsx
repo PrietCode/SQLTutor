@@ -24,6 +24,7 @@ const Icon = ({ name, size = 18 }) => {
 const rowSignature = (row) => JSON.stringify(Object.entries(row).filter(([key]) => !key.startsWith('__')).sort(([a], [b]) => a.localeCompare(b)));
 
 function DataTable({ rows = [], compact = false, faded = false, compare = null }) {
+  const [expanded, setExpanded] = useState(false);
   const currentRows = rows.map((row) => ({ ...row, __diffStatus: 'kept' }));
   if (compare?.kind === 'insert') {
     const addedCounts = new Map((compare.addedRows || []).map((row) => [rowSignature(row), 0]));
@@ -39,15 +40,24 @@ function DataTable({ rows = [], compact = false, faded = false, compare = null }
   const addedRowCount = currentRows.filter((row) => row.__diffStatus === 'added').length;
   const visualRows = [...currentRows, ...removedRows];
   const addedColumns = new Set(compare?.kind === 'join' ? compare.addedColumns || [] : []);
-  const columns = [...new Set(visualRows.flatMap((row) => Object.keys(row).filter((key) => !key.startsWith('__'))))].slice(0, compact ? 5 : 8);
+  const allColumnNames = [...new Set(visualRows.flatMap((row) => Object.keys(row).filter((key) => !key.startsWith('__'))))];
+  const baseLimit = compact ? 5 : 8;
+  let columns = allColumnNames.slice(0, baseLimit);
+  if (addedColumns.size) {
+    const missing = [...addedColumns].filter(col => !columns.includes(col));
+    columns = [...columns, ...missing];
+  }
   if (!visualRows.length) return <div className="empty-table">Sin filas en esta etapa</div>;
+  const limit = compact ? 6 : 10;
+  const hasExtra = visualRows.length > limit;
+  const hasAddRemove = removedRows.length > 0 || addedRowCount > 0 || addedColumns.size > 0;
   return <div className={`table-wrap ${faded ? 'faded' : ''}`}>
     <table className={compact ? 'compact-table' : ''}>
       <thead><tr>{columns.map((column) => <th className={addedColumns.has(column) ? 'added-column' : ''} key={column}>{column}</th>)}</tr></thead>
-      <tbody>{visualRows.slice(0, compact ? 6 : 10).map((row, index) => <tr className={row.__diffStatus === 'removed' ? 'removed-row' : row.__diffStatus === 'added' ? 'added-row' : ''} key={index}>{columns.map((column) => <td className={addedColumns.has(column) ? 'added-column' : ''} key={column}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>)}</tbody>
+      <tbody>{(expanded ? visualRows : visualRows.slice(0, limit)).map((row, index) => <tr className={row.__diffStatus === 'removed' ? 'removed-row' : row.__diffStatus === 'added' ? 'added-row' : ''} key={index}>{columns.map((column) => <td key={column} className={addedColumns.has(column) ? 'added-column' : ''}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>)}</tbody>
     </table>
-    {visualRows.length > (compact ? 6 : 10) && <span className="more-rows">+ {visualRows.length - (compact ? 6 : 10)} filas</span>}
-    {(removedRows.length > 0 || addedColumns.size > 0 || addedRowCount > 0) && <div className="comparison-legend">{removedRows.length > 0 && <span><i className="legend-dot removed" />filas recortadas</span>}{addedColumns.size > 0 && <span><i className="legend-dot added" />columnas agregadas</span>}{addedRowCount > 0 && <span><i className="legend-dot added" />filas agregadas</span>}</div>}
+    {hasExtra && <button className="more-rows-btn" onClick={() => setExpanded(!expanded)}>{expanded ? <><span className="collapse-circle">−</span> ocultar</> : <span>+ {visualRows.length - limit} filas</span>}</button>}
+    {hasAddRemove && <div className="comparison-legend">{removedRows.length > 0 && <span><i className="legend-dot removed" />filas recortadas</span>}{addedColumns.size > 0 && <span><i className="legend-dot added" />columnas agregadas</span>}{addedRowCount > 0 && <span><i className="legend-dot added" />filas agregadas</span>}</div>}
   </div>;
 }
 
@@ -225,65 +235,16 @@ function Editor({ sql, setSql, onRun, onStep, onReset, onImportSqlFile, selected
   </section>;
 }
 
-function StepControllerCard({ execution, activeStep, setActiveStep, showAll, setShowAll, onStep }) {
-  if (!execution) {
-    return <section className="step-controller-card empty">
-      <div className="controller-header"><Icon name="steps" /><h3>Paso a paso</h3></div>
-      <div className="controller-body">
-        <p className="muted">Escribe una consulta y presiona <strong>Paso a paso</strong> para ver su ejecución lógica paso por paso aquí mismo.</p>
-        <button className="primary-button run-step-btn" onClick={onStep}><Icon name="steps" /> Iniciar Paso a Paso</button>
-      </div>
-    </section>;
-  }
-
-  const currentStep = execution.steps[activeStep];
-  const totalSteps = execution.steps.length;
-
-  return <section className="step-controller-card active">
+function ResultPanel({ execution }) {
+  return <section className={`step-controller-card ${!execution ? 'empty' : ''}`}>
     <div className="controller-header">
-      <div className="title-area"><Icon name="steps" /><h3>Paso a paso</h3></div>
-      <span className="step-badge">Paso {activeStep + 1} de {totalSteps}</span>
+      <div className="title-area"><Icon name="table" /><h3>Resultados</h3></div>
+      {execution && <span className="result-badge">{execution.result.length} filas</span>}
     </div>
-
     <div className="controller-body">
-      <div className="step-dots-timeline">
-        {execution.steps.map((step, idx) => (
-          <button
-            key={idx}
-            className={`timeline-dot-btn ${idx === activeStep ? 'active' : idx < activeStep ? 'done' : ''}`}
-            onClick={() => setActiveStep(idx)}
-            title={step.type}
-          >
-            <span className="dot-index">{idx + 1}</span>
-            <span className="dot-label">{step.type}</span>
-          </button>
-        ))}
-      </div>
-
-      <div className={`current-step-box accent-${currentStep.accent}`}>
-        <span className="step-type-banner">{currentStep.type}</span>
-        <h4>{currentStep.title}</h4>
-        <p className="step-desc">{currentStep.detail}</p>
-        
-        <div className="mini-metric">
-          <span>Filas en esta etapa:</span>
-          <strong>{currentStep.count}</strong>
-        </div>
-      </div>
+      {execution ? <DataTable rows={execution.result} compact /> : <p className="muted">Ejecuta una consulta para ver los resultados aquí.</p>}
     </div>
-
-    <div className="controller-footer">
-      <div className="nav-buttons">
-        <button className="secondary-button" disabled={activeStep === 0} onClick={() => setActiveStep(prev => prev - 1)}>Anterior</button>
-        <button className="primary-button" disabled={activeStep === totalSteps - 1} onClick={() => setActiveStep(prev => prev + 1)}>Siguiente</button>
-      </div>
-      <div className="view-toggle">
-        <label className="switch-container">
-          <input type="checkbox" checked={!showAll} onChange={(e) => setShowAll(!e.target.checked)} />
-          <span>Ocultar pasos futuros</span>
-        </label>
-      </div>
-    </div>
+    {execution && <div className="controller-footer"><span className="muted">{execution.message}</span></div>}
   </section>;
 }
 
@@ -312,23 +273,24 @@ const writtenOrderIndex = (sql, step, index) => {
   return (match ? match.index : index * 1000) + index / 100;
 };
 
-function Journey({ execution, activeStep, setActiveStep, showAll, sql }) {
+function Journey({ execution, activeStep, setActiveStep, showAll, stepMode, sql }) {
   const [orderMode, setOrderMode] = useState('logical');
   const orderedSteps = useMemo(() => execution ? execution.steps.map((item, index) => ({ item, originalIndex: index })).sort((a, b) => orderMode === 'logical' ? a.originalIndex - b.originalIndex : writtenOrderIndex(sql, a.item, a.originalIndex) - writtenOrderIndex(sql, b.item, b.originalIndex)) : [], [execution, orderMode, sql]);
   if (!execution) return <section className="welcome-state"><div className="welcome-graphic"><span>SELECT</span><i /><span>FROM</span><i /><span>WHERE</span></div><h2>Tu consulta se convertirá en un recorrido</h2><p>Elige un ejemplo o escribe SQL. Verás cómo cada cláusula transforma los datos.</p></section>;
   const activeVisibleIndex = Math.max(orderedSteps.findIndex((entry) => entry.originalIndex === activeStep), 0);
-  const visible = showAll ? orderedSteps : orderedSteps.slice(0, activeVisibleIndex + 1);
+  const showAllSteps = showAll || orderMode === 'written';
+  const visible = showAllSteps ? orderedSteps : orderedSteps.slice(0, activeVisibleIndex + 1);
   return <section className="journey">
     <div className="section-title journey-title"><div><span className="eyebrow">RECORRIDO DE LA CONSULTA</span><h2>{orderMode === 'logical' ? 'Orden lógico de ejecución' : 'Orden escrito'}</h2></div><div className="journey-tools"><div className="order-switch" role="group" aria-label="Tipo de orden"><button className={orderMode === 'logical' ? 'active' : ''} onClick={() => setOrderMode('logical')}>Orden lógico</button><button className={orderMode === 'written' ? 'active' : ''} onClick={() => setOrderMode('written')}>Orden escrito</button></div><span className="result-badge">{execution.message}</span></div></div>
-    <div className="logical-order">{orderedSteps.map(({ item, originalIndex }, index) => <button key={`${item.type}-${originalIndex}`} className={originalIndex === activeStep ? 'active' : index < activeVisibleIndex || showAll ? 'done' : ''} onClick={() => setActiveStep(originalIndex)}><span>{index + 1}</span>{item.type}</button>)}</div>
+    <div className="logical-order">{orderedSteps.map(({ item, originalIndex }, index) => <button key={`${item.type}-${originalIndex}`} className={originalIndex === activeStep ? 'active' : index < activeVisibleIndex || showAllSteps ? 'done' : ''} onClick={() => setActiveStep(originalIndex)}><span>{index + 1}</span>{item.type}</button>)}</div>
     <div className="flow">{visible.map(({ item, originalIndex }, index) => <div className="flow-item" key={`${item.type}-${originalIndex}`}>
       {index > 0 && <div className="flow-arrow"><span>↓</span><small>{item.type}</small></div>}
-      <article className={`stage-card accent-${item.accent} ${originalIndex === activeStep || showAll ? 'focused' : ''}`} onClick={() => setActiveStep(originalIndex)}>
+      <article className={`stage-card accent-${item.accent} ${originalIndex === activeStep || showAllSteps ? 'focused' : ''}`} onClick={() => setActiveStep(originalIndex)}>
         <header><div className="stage-number">{index + 1}</div><div><span className="clause-chip">{item.type}</span><h3>{item.title}</h3></div><strong>{item.count} {item.count === 1 ? 'fila' : 'filas'}</strong></header>
         <p>{item.detail}</p><DataTable rows={item.rows} compact compare={item.compare} />
       </article>
     </div>)}</div>
-    {!showAll && <div className="step-controls"><button disabled={activeStep === 0} onClick={() => setActiveStep((s) => s - 1)}>Anterior</button><span>Paso {activeStep + 1} de {execution.steps.length}</span><button disabled={activeStep === execution.steps.length - 1} onClick={() => setActiveStep((s) => s + 1)}>Siguiente</button></div>}
+    {!showAll && orderMode === 'logical' && <div className="step-controls"><button disabled={activeStep === 0} onClick={() => setActiveStep((s) => s - 1)}>Anterior</button><span>Paso {activeStep + 1} de {execution.steps.length}</span><button disabled={activeStep === execution.steps.length - 1} onClick={() => setActiveStep((s) => s + 1)}>Siguiente</button></div>}
   </section>;
 }
 
@@ -364,6 +326,7 @@ export default function App() {
   const [execution, setExecution] = useState(null);
   const [activeStep, setActiveStep] = useState(0);
   const [showAll, setShowAll] = useState(true);
+  const [stepMode, setStepMode] = useState(false);
   const [error, setError] = useState('');
   const [importMessage, setImportMessage] = useState('');
   const [history, setHistory] = useState([]);
@@ -375,12 +338,17 @@ export default function App() {
 
   useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); setImportMessage(''); } else if (!selectedExample) { setSql(''); setError(''); } }, [selectedExample]);
   useEffect(() => () => clearInterval(timer.current), []);
-  const run = (stepMode = false) => {
+  const run = (startStep = false) => {
     clearInterval(timer.current);
     try {
-      const next = executeSql(sql, database); setExecution(next); setDatabase(next.db); setError(''); setImportMessage(''); setActiveStep(0); setShowAll(!stepMode); setTab('explain');
+      const next = executeSql(sql, database); setExecution(next); setDatabase(next.db); setError(''); setImportMessage(''); setActiveStep(0); setShowAll(!startStep); setStepMode(startStep); setTab('explain');
       setHistory((items) => [{ sql, time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) }, ...items.filter((x) => x.sql !== sql)].slice(0, 8));
     } catch (err) { setError(err.message); setImportMessage(''); setExecution(null); }
+  };
+  const toggleStepMode = () => {
+    if (stepMode) { setStepMode(false); setShowAll(true); }
+    else if (execution) { setStepMode(true); setShowAll(false); setActiveStep(0); }
+    else { run(true); }
   };
   const importSqlFile = async (content, fileName) => {
     clearInterval(timer.current);
@@ -395,7 +363,7 @@ export default function App() {
 
   return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
     <header className="topbar"><a className="brand" href="#top"><span className="brand-mark"><Icon name="database" /></span><span>SQL <strong>Journey</strong><small>Visual query explorer</small></span></a><nav><button className="mobile-only-flex" onClick={() => setSchemaOpen(true)}><Icon name="database" /> Datos</button><button onClick={() => setLibraryOpen(true)}><Icon name="book" /> Biblioteca SQL</button></nav><div className="header-actions"><button className="theme-toggle" onClick={() => setDarkMode((value) => !value)} aria-label={darkMode ? 'Activar modo claro' : 'Activar modo oscuro'} title={darkMode ? 'Modo claro' : 'Modo oscuro'}><Icon name={darkMode ? 'sun' : 'moon'} /></button><div className="session-pill"><span /> Sesión temporal</div></div></header>
-    <main id="top"><SchemaPanel database={database} setDatabase={setDatabase} open={schemaOpen} onClose={() => setSchemaOpen(false)} /><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, selectedExample, setSelectedExample, error, importMessage }} activeClause={execution?.steps[activeStep]?.type || ''} onImportSqlFile={importSqlFile} onRun={() => run(false)} onStep={() => run(true)} onReset={reset} /><StepControllerCard {...{ execution, activeStep, setActiveStep, showAll, setShowAll }} onStep={() => run(true)} /></div><div className="content-grid"><Journey {...{ execution, activeStep, setActiveStep, showAll, sql }} /><ExplainPanel {...{ execution, activeStep, tab, setTab, history }} onHistory={(value) => { setSql(value); setTab('explain'); }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div></main>
+    <main id="top"><SchemaPanel database={database} setDatabase={setDatabase} open={schemaOpen} onClose={() => setSchemaOpen(false)} /><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, selectedExample, setSelectedExample, error, importMessage }} activeClause={execution?.steps[activeStep]?.type || ''} onImportSqlFile={importSqlFile} onRun={() => run(false)} onStep={toggleStepMode} onReset={reset} /><ResultPanel execution={execution} /></div><div className="content-grid"><Journey {...{ execution, activeStep, setActiveStep, showAll, stepMode, sql }} /><ExplainPanel {...{ execution, activeStep, tab, setTab, history }} onHistory={(value) => { setSql(value); setTab('explain'); }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div></main>
     <footer className="app-footer">
       <div className="footer-main"><span>Página realizada por <strong>Prieto Agustin</strong></span><span>Alumno UTNFRC</span><span className="footer-badge">Fase de Pruebas</span></div>
       <p className="footer-legal">Copyright © 2026 Prieto Agustin. Todos los derechos reservados. Uso educativo autorizado. Prohibida la copia, redistribución o explotación comercial sin permiso.</p>
