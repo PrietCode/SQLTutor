@@ -226,6 +226,37 @@ test('INSERT with self-referencing FK correctly rejects invalid forward referenc
   ), /conflicto con la restriccion FOREIGN KEY/);
 });
 
+test('scalar subquery with = in WHERE', () => {
+  const result = executeSql(`SELECT * FROM Products WHERE price = (SELECT MIN(price) FROM Products)`, createSeedDatabase());
+  assert.equal(result.result.length, 1);
+  assert.equal(result.result[0].name, 'Blender');
+  assert.equal(result.result[0].price, 69.99);
+});
+
+test('IN subquery in WHERE', () => {
+  const result = executeSql(`SELECT * FROM Products WHERE category_id IN (SELECT category_id FROM Categories WHERE name LIKE 'E%')`, createSeedDatabase());
+  assert.equal(result.result.length, 3);
+  assert.ok(result.result.every(row => [1, 2, 3].includes(row.product_id)));
+});
+
+test('>= ALL subquery in WHERE', () => {
+  const result = executeSql(`SELECT * FROM Employees WHERE salary >= ALL (SELECT salary FROM Employees WHERE department = 'Ventas')`, createSeedDatabase());
+  assert.equal(result.result.length, 2);
+  assert.ok(result.result.some(row => row.name === 'Mateo Ruiz'));
+  assert.ok(result.result.some(row => row.name === 'Sofia Diaz'));
+});
+
+test('>= ALL subquery in HAVING', () => {
+  const result = executeSql(`SELECT department, AVG(salary) AS avg_salary FROM Employees GROUP BY department HAVING AVG(salary) >= ALL (SELECT AVG(salary) FROM Employees GROUP BY department)`, createSeedDatabase());
+  assert.equal(result.result.length, 1);
+  assert.equal(result.result[0].department, 'Tecnologia');
+});
+
+test('nested subqueries', () => {
+  const result = executeSql(`SELECT * FROM Products WHERE category_id IN (SELECT category_id FROM Categories WHERE category_id IN (SELECT DISTINCT category_id FROM Products WHERE stock > 0))`, createSeedDatabase());
+  assert.equal(result.result.length, 6);
+});
+
 test('unsupported or malformed SQL returns a clear error', () => {
   assert.throws(() => executeSql('MERGE Products;', createSeedDatabase()), /Comando no reconocido/);
   assert.throws(() => executeSql('SELECT * FROM Missing;', createSeedDatabase()), /no existe/);

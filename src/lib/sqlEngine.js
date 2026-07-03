@@ -106,8 +106,110 @@ function splitLogic(expression, operator) {
   return null;
 }
 
-function testCondition(row, raw) {
+const sqlValue = (v) => {
+  if (v === null || v === undefined) return 'NULL';
+  if (typeof v === 'string') return `'${v.replace(/'/g, "''")}'`;
+  return String(v);
+};
+
+function findOutermostSubquery(expr) {
+  for (let i = 0; i < expr.length; i++) {
+    if (expr[i] === "'") {
+      i++;
+      while (i < expr.length) {
+        if (expr[i] === "'" && expr[i + 1] === "'") i += 2;
+        else if (expr[i] === "'") break;
+        else i++;
+      }
+      continue;
+    }
+    if (expr[i] === '(') {
+      const rest = expr.slice(i + 1).trimStart();
+      if (/^SELECT\b/i.test(rest)) {
+        let depth = 1;
+        let j = i + 1;
+        for (; j < expr.length && depth > 0; j++) {
+          if (expr[j] === "'") {
+            j++;
+            while (j < expr.length) {
+              if (expr[j] === "'" && expr[j + 1] === "'") j += 2;
+              else if (expr[j] === "'") break;
+              else j++;
+            }
+            continue;
+          }
+          if (expr[j] === '(') depth++;
+          if (expr[j] === ')') depth--;
+        }
+        if (depth !== 0) return null;
+        return { start: i, end: j - 1 };
+      }
+    }
+  }
+  return null;
+}
+
+function resolveSubqueries(expr, db) {
+  const sq = findOutermostSubquery(expr);
+  if (!sq) return expr;
+
+  const innerSql = expr.slice(sq.start + 1, sq.end).trim();
+  const execution = executeSql(innerSql, db);
+  const values = execution.result.map(row => Object.values(row)[0]);
+
+  const prefix = expr.slice(0, sq.start);
+
+  const allMatch = prefix.match(/(?:^|\s)(>=|<=|<>|!=|=|>|<)\s+ALL\s*$/i);
+  if (allMatch) {
+    const op = allMatch[1];
+    const replaceFrom = prefix.length - allMatch[0].length;
+    let replaceWith;
+    if (values.length === 0) {
+      replaceWith = '1=1';
+    } else if (op === '=') {
+      const unique = [...new Set(values)];
+      replaceWith = unique.length === 1 ? ` ${op} ${sqlValue(unique[0])}` : '1=0';
+    } else if (op === '<>') {
+      replaceWith = ` NOT IN (${values.map(v => sqlValue(v)).join(',')})`;
+    } else if (op === '>=' || op === '>') {
+      const max = values.reduce((a, b) => a > b ? a : b);
+      replaceWith = ` ${op} ${sqlValue(max)}`;
+    } else {
+      const min = values.reduce((a, b) => a < b ? a : b);
+      replaceWith = ` ${op} ${sqlValue(min)}`;
+    }
+    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db);
+  }
+
+  const inMatch = prefix.match(/(?:^|\s)(NOT\s+)?IN\s*$/i);
+  if (inMatch) {
+    const not = inMatch[1] || '';
+    const replaceFrom = prefix.length - inMatch[0].length;
+    let replaceWith;
+    if (values.length === 0) {
+      replaceWith = not ? '1=1' : '1=0';
+    } else {
+      replaceWith = ` ${not}IN (${values.map(v => sqlValue(v)).join(',')})`;
+    }
+    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db);
+  }
+
+  const opMatch = prefix.match(/(?:^|\s)(>=|<=|<>|!=|=|>|<)\s*$/i);
+  if (opMatch) {
+    const op = opMatch[1];
+    const replaceFrom = prefix.length - opMatch[0].length;
+    const scalar = values.length > 0 ? values[0] : null;
+    const replaceWith = ` ${op} ${sqlValue(scalar)}`;
+    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db);
+  }
+
+  const replaceWith = ` ${sqlValue(values.length > 0 ? values[0] : null)}`;
+  return resolveSubqueries(expr.slice(0, sq.start) + replaceWith + expr.slice(sq.end + 1), db);
+}
+
+function testCondition(row, raw, db) {
   let expr = raw.trim().replace(/\s+/g, ' ');
+  if (db) expr = resolveSubqueries(expr, db);
   while (expr.startsWith('(') && expr.endsWith(')')) expr = expr.slice(1, -1).trim();
   const or = splitLogic(expr, 'OR');
   if (or) return testCondition(row, or[0]) || testCondition(row, or[1]);
@@ -152,8 +254,45 @@ function splitComma(text) {
 }
 
 function clause(sql, name, stops) {
-  const stop = stops.length ? `(?=\\s+(?:${stops.join('|')})\\b|$)` : '$';
-  return sql.match(new RegExp(`\\b${name}\\s+([\\s\\S]*?)${stop}`, 'i'))?.[1]?.trim();
+  const upper = sql.toUpperCase();
+  const n = name.toUpperCase();
+  let nameIdx = -1;
+  let scanDepth = 0;
+  let quoted = false;
+  for (let i = 0; i < sql.length; i++) {
+    if (upper[i] === "'" && upper[i + 1] === "'") { i++; continue; }
+    if (upper[i] === "'") { quoted = !quoted; continue; }
+    if (quoted) continue;
+    if (upper[i] === '(') { scanDepth++; continue; }
+    if (upper[i] === ')') { scanDepth--; continue; }
+    if (scanDepth === 0 && /\w/.test(upper[i]) && (i === 0 || !/\w/.test(upper[i - 1]))) {
+      if (upper.startsWith(n, i) && (i + n.length >= upper.length || !/\w/.test(upper[i + n.length])) && /\s/.test(upper[i + n.length])) {
+        nameIdx = i + n.length;
+        break;
+      }
+    }
+  }
+  if (nameIdx === -1) return undefined;
+  const contentIdx = nameIdx + 1;
+  if (!stops.length) return sql.slice(contentIdx).trim();
+  const stopUpper = stops.map(s => s.toUpperCase());
+  let depth = 0;
+  quoted = false;
+  for (let i = contentIdx; i < sql.length; i++) {
+    if (upper[i] === "'" && upper[i + 1] === "'") { i++; continue; }
+    if (upper[i] === "'") { quoted = !quoted; continue; }
+    if (quoted) continue;
+    if (upper[i] === '(') { depth++; continue; }
+    if (upper[i] === ')') { depth--; continue; }
+    if (depth === 0 && /\w/.test(upper[i]) && (i === contentIdx || !/\w/.test(upper[i - 1]))) {
+      for (const s of stopUpper) {
+        if (upper.startsWith(s, i) && (i + s.length >= upper.length || !/\w/.test(upper[i + s.length]))) {
+          return sql.slice(contentIdx, i).trim();
+        }
+      }
+    }
+  }
+  return sql.slice(contentIdx).trim();
 }
 
 function aggregateValue(expression, rows) {
@@ -212,7 +351,7 @@ function project(groups, selectText) {
 const step = (type, title, detail, rows, accent = 'blue', compare = null) => ({ type, title, detail, rows: displayRows(rows).slice(0, 12), count: rows.length, accent, compare });
 
 function executeSelect(sql, db) {
-  const selectText = clause(sql, 'SELECT', ['FROM']);
+  const selectText = clause(sql, 'SELECT', ['FROM']).replace(/^DISTINCT\s+/i, '');
   const fromText = clause(sql, 'FROM', ['INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'JOIN', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY', 'OFFSET', 'LIMIT']);
   if (!selectText || !fromText) throw new Error('Una consulta SELECT necesita las clausulas SELECT y FROM.');
   const baseMatch = fromText.match(/^(\w+)(?:\s+(?:AS\s+)?(\w+))?/i);
@@ -231,12 +370,12 @@ function executeSelect(sql, db) {
     const beforeJoin = rows;
     const combined = [];
     rows.forEach((left) => {
-      const matches = rightRows.filter((right) => testCondition({ ...left, ...right }, join[4]));
+      const matches = rightRows.filter((right) => testCondition({ ...left, ...right }, join[4], db));
       if (matches.length) matches.forEach((right) => combined.push({ ...left, ...right }));
       else if (kind === 'LEFT' || kind === 'FULL') combined.push({ ...left, ...Object.fromEntries(Object.keys(rightRows[0] || {}).map((k) => [k, null])) });
     });
     if (kind === 'RIGHT' || kind === 'FULL') rightRows.forEach((right) => {
-      if (!rows.some((left) => testCondition({ ...left, ...right }, join[4]))) combined.push(right);
+      if (!rows.some((left) => testCondition({ ...left, ...right }, join[4], db))) combined.push(right);
     });
     rows = combined;
     const beforeColumns = new Set(displayRows(beforeJoin).flatMap((row) => Object.keys(row)));
@@ -247,7 +386,7 @@ function executeSelect(sql, db) {
 
   const whereText = clause(sql, 'WHERE', ['GROUP BY', 'HAVING', 'ORDER BY', 'OFFSET', 'LIMIT']);
   if (whereText) {
-    const beforeRows = rows; const before = rows.length; rows = rows.filter((row) => testCondition(row, whereText));
+    const beforeRows = rows; const before = rows.length; rows = rows.filter((row) => testCondition(row, whereText, db));
     steps.push(step('WHERE', 'Filtrar filas', `${whereText}. Se conservan ${rows.length} de ${before} filas. Las filas descartadas se muestran en rojo.`, rows, 'amber', { kind: 'filter', beforeRows: displayRows(beforeRows).slice(0, 12) }));
   }
   const groupText = clause(sql, 'GROUP BY', ['HAVING', 'ORDER BY', 'OFFSET', 'LIMIT']);
@@ -267,8 +406,9 @@ function executeSelect(sql, db) {
   const havingText = clause(sql, 'HAVING', ['ORDER BY', 'OFFSET', 'LIMIT']);
   if (havingText) {
     const before = groups.length;
+    const resolvedHaving = resolveSubqueries(havingText, db);
     groups = groups.filter((group) => {
-      const expanded = havingText.replace(/(COUNT|SUM|AVG|MIN|MAX)\s*\((.*?)\)/gi, (m) => String(aggregateValue(m, group.rows)));
+      const expanded = resolvedHaving.replace(/(COUNT|SUM|AVG|MIN|MAX)\s*\((.*?)\)/gi, (m) => String(aggregateValue(m, group.rows)));
       return testCondition(group.rows[0] || {}, expanded);
     });
     steps.push(step('HAVING', 'Filtrar grupos', `${havingText}. Se conservan ${groups.length} de ${before} grupos.`, groups.map((g) => ({ grupo: g.key, filas: g.rows.length })), 'orange'));
@@ -370,13 +510,13 @@ function executeMutation(sql, db) {
     const assignments = splitComma(match[2]).map((item) => item.match(/^(\w+)\s*=\s*(.+)$/)).filter(Boolean);
     const affected = [];
     const columns = [...new Set([...tableColumns(next[table]), ...assignments.map((a) => a[1])])];
-    next[table] = rememberColumns(next[table].map((row) => { if (match[3] && !testCondition(row, match[3])) return row; const changed = { ...row }; assignments.forEach((a) => { changed[a[1]] = unquote(a[2]); }); affected.push(changed); return changed; }), columns, tableColumnTypes(next[table]), tableConstraints(next[table]));
+    next[table] = rememberColumns(next[table].map((row) => { if (match[3] && !testCondition(row, match[3], next)) return row; const changed = { ...row }; assignments.forEach((a) => { changed[a[1]] = unquote(a[2]); }); affected.push(changed); return changed; }), columns, tableColumnTypes(next[table]), tableConstraints(next[table]));
     return { db: next, result: affected, statement: 'UPDATE', message: `${affected.length} filas actualizadas`, steps: [step('WHERE', 'Localizar filas', match[3] || 'Sin WHERE: se seleccionan todas las filas.', affected, 'amber'), step('SET', 'Aplicar cambios', match[2], affected, 'blue'), step('UPDATE', 'Tabla actualizada', 'El cambio no sale de este sandbox.', next[table], 'green')] };
   }
   if ((match = sql.match(/^DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+([\s\S]+))?$/i))) {
     const table = findTable(next, match[1]); if (!table) throw new Error(`La tabla "${match[1]}" no existe.`);
     const columns = tableColumns(next[table]);
-    const removed = next[table].filter((r) => !match[2] || testCondition(r, match[2])); next[table] = rememberColumns(next[table].filter((r) => match[2] && !testCondition(r, match[2])), columns, tableColumnTypes(next[table]), tableConstraints(next[table]));
+    const removed = next[table].filter((r) => !match[2] || testCondition(r, match[2], next)); next[table] = rememberColumns(next[table].filter((r) => match[2] && !testCondition(r, match[2], next)), columns, tableColumnTypes(next[table]), tableConstraints(next[table]));
     return { db: next, result: next[table], statement: 'DELETE', message: `${removed.length} filas eliminadas`, steps: [step('WHERE', 'Identificar filas', match[2] || 'Sin WHERE: todas las filas.', removed, 'amber'), step('DELETE', 'Eliminar seleccionadas', 'La tabla conserva las filas no coincidentes.', next[table], 'red')] };
   }
   throw new Error('Esta sentencia de modificacion aun no esta soportada. Prueba INSERT, UPDATE o DELETE simples.');
