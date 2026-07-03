@@ -149,13 +149,17 @@ function findOutermostSubquery(expr) {
   return null;
 }
 
-function resolveSubqueries(expr, db) {
+function resolveSubqueries(expr, db, stepsCollector) {
   const sq = findOutermostSubquery(expr);
   if (!sq) return expr;
 
   const innerSql = expr.slice(sq.start + 1, sq.end).trim();
   const execution = executeSql(innerSql, db);
   const values = execution.result.map(row => Object.values(row)[0]);
+
+  if (stepsCollector) {
+    stepsCollector.push(...execution.steps.map(s => ({ ...s, isSubquery: true })));
+  }
 
   const prefix = expr.slice(0, sq.start);
 
@@ -178,7 +182,7 @@ function resolveSubqueries(expr, db) {
       const min = values.reduce((a, b) => a < b ? a : b);
       replaceWith = ` ${op} ${sqlValue(min)}`;
     }
-    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db);
+    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector);
   }
 
   const inMatch = prefix.match(/(?:^|\s)(NOT\s+)?IN\s*$/i);
@@ -191,7 +195,7 @@ function resolveSubqueries(expr, db) {
     } else {
       replaceWith = ` ${not}IN (${values.map(v => sqlValue(v)).join(',')})`;
     }
-    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db);
+    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector);
   }
 
   const opMatch = prefix.match(/(?:^|\s)(>=|<=|<>|!=|=|>|<)\s*$/i);
@@ -200,11 +204,11 @@ function resolveSubqueries(expr, db) {
     const replaceFrom = prefix.length - opMatch[0].length;
     const scalar = values.length > 0 ? values[0] : null;
     const replaceWith = ` ${op} ${sqlValue(scalar)}`;
-    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db);
+    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector);
   }
 
   const replaceWith = ` ${sqlValue(values.length > 0 ? values[0] : null)}`;
-  return resolveSubqueries(expr.slice(0, sq.start) + replaceWith + expr.slice(sq.end + 1), db);
+  return resolveSubqueries(expr.slice(0, sq.start) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector);
 }
 
 function testCondition(row, raw, db) {
@@ -386,8 +390,15 @@ function executeSelect(sql, db) {
 
   const whereText = clause(sql, 'WHERE', ['GROUP BY', 'HAVING', 'ORDER BY', 'OFFSET', 'LIMIT']);
   if (whereText) {
-    const beforeRows = rows; const before = rows.length; rows = rows.filter((row) => testCondition(row, whereText, db));
-    steps.push(step('WHERE', 'Filtrar filas', `${whereText}. Se conservan ${rows.length} de ${before} filas. Las filas descartadas se muestran en rojo.`, rows, 'amber', { kind: 'filter', beforeRows: displayRows(beforeRows).slice(0, 12) }));
+    const subquerySteps = [];
+    const hasSubq = /\(\s*SELECT\b/i.test(whereText);
+    const whereComparedColumn = hasSubq ? whereText.match(/^([\s\S]+?)\s*(?:(?:>=|<=|<>|!=|=|>|<)(?:\s+ALL)?|NOT\s+IN|IN)\s*\(\s*SELECT/i)?.[1]?.trim() : undefined;
+    const whereCompare = { kind: 'filter', beforeRows: displayRows(rows).slice(0, 12) };
+    if (whereComparedColumn) whereCompare.comparedColumn = whereComparedColumn;
+    const resolvedWhere = hasSubq ? resolveSubqueries(whereText, db, subquerySteps) : whereText;
+    if (subquerySteps.length) whereCompare.subquerySteps = subquerySteps;
+    const beforeRows = rows; const before = rows.length; rows = rows.filter((row) => testCondition(row, resolvedWhere));
+    steps.push(step('WHERE', 'Filtrar filas', `${whereText}. Se conservan ${rows.length} de ${before} filas. Las filas descartadas se muestran en rojo.`, rows, 'amber', whereCompare));
   }
   const groupText = clause(sql, 'GROUP BY', ['HAVING', 'ORDER BY', 'OFFSET', 'LIMIT']);
   let groups = [{ key: 'all', rows }];
@@ -405,13 +416,16 @@ function executeSelect(sql, db) {
 
   const havingText = clause(sql, 'HAVING', ['ORDER BY', 'OFFSET', 'LIMIT']);
   if (havingText) {
+    const subquerySteps = [];
+    const resolvedHaving = /\(\s*SELECT\b/i.test(havingText) ? resolveSubqueries(havingText, db, subquerySteps) : havingText;
     const before = groups.length;
-    const resolvedHaving = resolveSubqueries(havingText, db);
     groups = groups.filter((group) => {
       const expanded = resolvedHaving.replace(/(COUNT|SUM|AVG|MIN|MAX)\s*\((.*?)\)/gi, (m) => String(aggregateValue(m, group.rows)));
       return testCondition(group.rows[0] || {}, expanded);
     });
-    steps.push(step('HAVING', 'Filtrar grupos', `${havingText}. Se conservan ${groups.length} de ${before} grupos.`, groups.map((g) => ({ grupo: g.key, filas: g.rows.length })), 'orange'));
+    const havingCompare = {};
+    if (subquerySteps.length) havingCompare.subquerySteps = subquerySteps;
+    steps.push(step('HAVING', 'Filtrar grupos', `${havingText}. Se conservan ${groups.length} de ${before} grupos.`, groups.map((g) => ({ grupo: g.key, filas: g.rows.length })), 'orange', havingCompare));
   }
 
   let result = project(groups, selectText.replace(/^TOP\s+\d+\s+/i, ''));
