@@ -54,7 +54,11 @@ const valueOf = (row, token) => {
   if (Object.prototype.hasOwnProperty.call(row, key)) return row[key];
   const found = Object.keys(row).find((k) => k.toLowerCase() === key.toLowerCase())
     || Object.keys(row).find((k) => stripAlias(k).toLowerCase() === key.toLowerCase());
-  return found ? row[found] : unquote(key);
+  if (found) return row[found];
+  if (/^'.*'$/.test(key) || /^null$/i.test(key) || /^(true|false)$/i.test(key) || !Number.isNaN(Number(key))) return unquote(key);
+  const alias = key.match(/^([A-Za-z_]\w*)\./)?.[1];
+  if (alias) throw new Error(`No se reconoce el identificador de tabla o alias "${alias}".`);
+  throw new Error(`No se reconoce la columna "${key}".`);
 };
 const displayRows = (rows) => rows.map((row) => Object.fromEntries(
   Object.entries(row).filter(([key]) => !key.includes('.') || !(stripAlias(key) in row))
@@ -352,6 +356,11 @@ function project(groups, selectText) {
   })));
 }
 
+const orderValue = (resultRow, group, key) => {
+  try { return valueOf(resultRow, key); }
+  catch (err) { return valueOf(group.rows[0] || {}, key); }
+};
+
 const step = (type, title, detail, rows, accent = 'blue', compare = null) => ({ type, title, detail, rows: displayRows(rows).slice(0, 12), count: rows.length, accent, compare });
 
 function executeSelect(sql, db) {
@@ -433,7 +442,7 @@ function executeSelect(sql, db) {
   const orderText = clause(sql, 'ORDER BY', ['OFFSET', 'LIMIT']);
   if (orderText) {
     const fields = splitComma(orderText).map((item) => { const m = item.match(/^(.*?)(?:\s+(ASC|DESC))?$/i); return { key: m[1].trim(), dir: (m[2] || 'ASC').toUpperCase() }; });
-    result = [...result].sort((a, b) => { for (const f of fields) { const av = valueOf(a, f.key); const bv = valueOf(b, f.key); if (av < bv) return f.dir === 'ASC' ? -1 : 1; if (av > bv) return f.dir === 'ASC' ? 1 : -1; } return 0; });
+    result = result.map((row, index) => ({ row, group: groups[index] })).sort((a, b) => { for (const f of fields) { const av = orderValue(a.row, a.group, f.key); const bv = orderValue(b.row, b.group, f.key); if (av < bv) return f.dir === 'ASC' ? -1 : 1; if (av > bv) return f.dir === 'ASC' ? 1 : -1; } return 0; }).map((item) => item.row);
     steps.push(step('ORDER BY', 'Ordenar resultado', `${orderText} define la secuencia final.`, result, 'pink'));
   }
   const top = sql.match(/^\s*SELECT\s+TOP\s+(\d+)/i)?.[1];

@@ -30,6 +30,12 @@ test('joins expose both sources and preserve unmatched rows', () => {
   assert.ok(execution.result.some((row) => row.order_id === null));
 });
 
+test('qualified columns require declared aliases', () => {
+  assert.throws(() => executeSql(`SELECT c.first_name, o.order_id, o.status
+    FROM Customers
+    FULL JOIN Orders ON c.customer_id = o.customer_id;`, createSeedDatabase()), /alias "c"/);
+});
+
 test('scalar functions and SQL Server pagination are evaluated', () => {
   const functions = executeSql(`SELECT CONCAT(UPPER(last_name), ', ', first_name) AS name,
     COALESCE(email, 'Sin email') AS contact, SUBSTRING(city, 1, 3) AS city

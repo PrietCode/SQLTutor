@@ -2,6 +2,22 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { concepts, createSeedDatabase, examples } from './data/seed';
 import { executeSql, executeSqlScript } from './lib/sqlEngine';
 
+const hasTerminatingSemicolon = (input) => {
+  let quoted = false; let lineComment = false; let blockComment = false; let last = '';
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i]; const next = input[i + 1];
+    if (lineComment) { if (char === '\n') lineComment = false; continue; }
+    if (blockComment) { if (char === '*' && next === '/') { blockComment = false; i += 1; } continue; }
+    if (!quoted && char === '-' && next === '-') { lineComment = true; i += 1; continue; }
+    if (!quoted && char === '/' && next === '*') { blockComment = true; i += 1; continue; }
+    if (char === "'" && next === "'") { if (!/\s/.test(char)) last = char; i += 1; continue; }
+    if (!quoted && char === ';') { last = ';'; continue; }
+    if (char === "'") quoted = !quoted;
+    if (!/\s/.test(char)) last = char;
+  }
+  return last === ';';
+};
+
 const Icon = ({ name, size = 18 }) => {
   const paths = {
     play: <><path d="m7 4 10 8L7 20Z" /></>,
@@ -213,11 +229,11 @@ function Editor({ sql, setSql, onRun, onStep, onReset, onImportSqlFile, selected
   return <section className="editor-card">
     <div className="editor-toolbar">
       <div><span className="status-dot" /><strong>Editor SQL</strong><span className="dialect">SQL Server compatible</span></div>
-      <div className="editor-toolbar-tools"><button className="import-file-button" onClick={() => fileInput.current?.click()}><Icon name="upload" /> Importar .sql</button><input ref={fileInput} type="file" accept=".sql,text/sql,.txt" hidden onChange={handleFile} /><div className="example-picker"><label htmlFor="examples">Ejemplo</label><select id="examples" value={selectedExample} onChange={(e) => setSelectedExample(e.target.value)}><option value="">Seleccionar</option>{examples.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></div></div>
+      <div className="editor-toolbar-tools"><button className="import-file-button" onClick={() => fileInput.current?.click()}><Icon name="upload" /> Importar .sql</button><input ref={fileInput} type="file" accept=".sql,text/sql,.txt" hidden onChange={handleFile} /><div className="example-picker"><label htmlFor="examples">Ejemplo</label><select id="examples" value={selectedExample} onChange={(e) => { const val = e.target.value; setSelectedExample(val); if (!val) { setSql(''); setError(''); setImportMessage(''); } }}><option value="">Seleccionar</option>{examples.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></div></div>
     </div>
     <div className="code-editor">
       <div className="line-numbers">{Array.from({ length: lineCount }, (_, i) => <span key={i}>{i + 1}</span>)}</div>
-      <textarea ref={textarea} value={sql} onChange={(e) => setSql(e.target.value)} spellCheck="false" aria-label="Consulta SQL" onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') onRun(); }} />
+      <textarea ref={textarea} value={sql} onChange={(e) => { setSql(e.target.value); setSelectedExample(''); }} spellCheck="false" aria-label="Consulta SQL" onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') onRun(); }} />
     </div>
     <div className="query-tracker" aria-label="Clausulas detectadas">
       <span>Consulta:</span>{queryKeywords(sql).map((keyword, index) => {
@@ -230,7 +246,7 @@ function Editor({ sql, setSql, onRun, onStep, onReset, onImportSqlFile, selected
     {importMessage && <div className="success-message"><strong>Archivo SQL importado.</strong> {importMessage}</div>}
     <div className="editor-footer">
       <span className="shortcut"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> para ejecutar</span>
-      <div className="actions"><button className="ghost-button" onClick={() => setSql(examples.find((item) => item.id === selectedExample)?.sql || sql)}>Cargar ejemplo</button><button className="ghost-button" onClick={onReset}><Icon name="reset" /> Reset</button><button className="secondary-button" onClick={onStep}><Icon name="steps" /> Paso a paso</button><button className="primary-button" onClick={onRun}><Icon name="play" /> Ejecutar</button></div>
+      <div className="actions"><button className="ghost-button" onClick={onReset}><Icon name="reset" /> Reset</button><button className="secondary-button" onClick={onStep}><Icon name="steps" /> Paso a paso</button><button className="primary-button" onClick={onRun}><Icon name="play" /> Ejecutar</button></div>
     </div>
   </section>;
 }
@@ -337,11 +353,12 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(false);
   const timer = useRef();
 
-  useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); setImportMessage(''); } else if (!selectedExample) { setSql(''); setError(''); } }, [selectedExample]);
+  useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); setImportMessage(''); } }, [selectedExample]);
   useEffect(() => () => clearInterval(timer.current), []);
   const run = (startStep = false) => {
     clearInterval(timer.current);
     try {
+      if (!hasTerminatingSemicolon(sql)) throw new Error('La sentencia SQL debe finalizar con punto y coma (;).');
       const next = executeSql(sql, database); setExecution(next); setDatabase(next.db); setError(''); setImportMessage(''); setActiveStep(0); setShowAll(!startStep); setStepMode(startStep); setTab('explain');
       setHistory((items) => [{ sql, time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) }, ...items.filter((x) => x.sql !== sql)].slice(0, 8));
     } catch (err) { setError(err.message); setImportMessage(''); setExecution(null); }
@@ -354,6 +371,7 @@ export default function App() {
   const importSqlFile = async (content, fileName) => {
     clearInterval(timer.current);
     try {
+      if (!hasTerminatingSemicolon(content)) throw new Error('El archivo SQL debe finalizar cada sentencia con punto y coma (;).');
       const next = executeSqlScript(content, database);
       setDatabase(next.db); setExecution(null); setError(''); setActiveStep(0); setShowAll(true); setTab('explain');
       setImportMessage(`${fileName}: ${next.importedStatements} sentencias ejecutadas sobre la base local.`);
