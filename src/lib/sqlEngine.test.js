@@ -28,6 +28,11 @@ test('joins expose both sources and preserve unmatched rows', () => {
   assert.deepEqual(execution.steps.slice(0, 3).map((item) => item.type), ['FROM', 'SOURCE', 'JOIN']);
   assert.equal(execution.result.length, 6);
   assert.ok(execution.result.some((row) => row.order_id === null));
+  assert.match(execution.steps.find((step) => step.type === 'JOIN').detail, /\d+ x \d+ = \d+ pares/);
+  const join = execution.steps.find((step) => step.type === 'JOIN');
+  assert.equal(join.compare.beforeRows.length, 25);
+  assert.equal(join.compare.outerVirtualRows.length, 1);
+  assert.deepEqual(join.compare.joinKeys, [{ left: 'c.customer_id', right: 'o.customer_id', leftColumn: 'customer_id', rightColumn: 'customer_id', label: 'c.customer_id = o.customer_id' }]);
 });
 
 test('qualified columns require declared aliases', () => {
@@ -47,6 +52,16 @@ test('scalar functions and SQL Server pagination are evaluated', () => {
   const page = executeSql(`SELECT product_id FROM Products ORDER BY product_id
     OFFSET 2 ROWS FETCH NEXT 2 ROWS ONLY;`, createSeedDatabase());
   assert.deepEqual(page.result.map((row) => row.product_id), [3, 4]);
+});
+
+test('SELECT projection tracks removed columns for the visual flow', () => {
+  const execution = executeSql('SELECT first_name FROM Customers;', createSeedDatabase());
+  const selectStep = execution.steps.find((step) => step.type === 'SELECT');
+  assert.equal(selectStep.compare.kind, 'project');
+  assert.deepEqual(selectStep.rows[0], { first_name: 'Ana' });
+  assert.ok(selectStep.compare.removedColumns.includes('customer_id'));
+  assert.ok(selectStep.compare.removedColumns.includes('last_name'));
+  assert.ok(selectStep.compare.beforeRows[0].email);
 });
 
 test('DML changes only the returned sandbox copy', () => {
@@ -170,8 +185,9 @@ test('CREATE TABLE preserves many columns and table-level foreign keys', () => {
   assert.deepEqual(db.CIUDADES.columns, ['Id', 'Nombre', 'Provincia', 'CodigoPostal', 'Latitud', 'Longitud']);
   assert.equal(db.CIUDADES.columnTypes.Nombre, 'VARCHAR(80)');
   assert.equal(db.CIUDADES.columnTypes.Latitud, 'FLOAT');
-  assert.equal(db.CIUDADES.constraints.length, 2);
+  assert.equal(db.CIUDADES.constraints.length, 3);
   assert.ok(db.CIUDADES.constraints.find(c => c.type === 'PRIMARY KEY' && c.columns[0] === 'Id'));
+  assert.ok(db.CIUDADES.constraints.find(c => c.type === 'NOT NULL' && c.columns[0] === 'Nombre'));
   assert.ok(db.CIUDADES.constraints.find(c => c.type === 'FOREIGN KEY' && c.references.table === 'PROVINCIAS'));
   assert.equal(db.CIUDADES.columns.includes('FOREIGN'), false);
 });
@@ -258,6 +274,43 @@ test('>= ALL subquery in HAVING', () => {
   assert.equal(result.result[0].department, 'Tecnologia');
 });
 
+test('correlated subquery in HAVING can reference outer grouped aliases', () => {
+  const script = `CREATE TABLE EMPLEADOS_TEST (
+    Legajo INT PRIMARY KEY,
+    Apellido VARCHAR(40),
+    Nombre VARCHAR(40),
+    Legajo_jefe INT
+  );
+  CREATE TABLE VENTAS_TEST (
+    Nro_Ticket INT PRIMARY KEY,
+    Legajo_vend INT,
+    Monto DECIMAL(10,2)
+  );
+  INSERT INTO EMPLEADOS_TEST VALUES
+    (100,'Jefe','Ana',NULL),
+    (101,'Vendedor','Bruno',100),
+    (102,'Vendedor','Carla',100);
+  INSERT INTO VENTAS_TEST VALUES
+    (1,100,100),
+    (2,101,120),
+    (3,101,90),
+    (4,102,40);
+  SELECT E.Legajo, E.Apellido, E.Nombre
+  FROM EMPLEADOS_TEST E
+  JOIN VENTAS_TEST V ON E.Legajo = V.Legajo_vend
+  GROUP BY E.Legajo, E.Apellido, E.Nombre, E.Legajo_jefe
+  HAVING SUM(V.Monto) > (
+      SELECT SUM(V2.Monto)
+      FROM VENTAS_TEST V2
+      WHERE V2.Legajo_vend = E.Legajo_jefe
+  );`;
+
+  const result = executeSqlScript(script, createSeedDatabase());
+  assert.deepEqual(result.result, [{ Legajo: 101, Apellido: 'Vendedor', Nombre: 'Bruno' }]);
+  assert.equal(result.steps.find((step) => step.type === 'HAVING').count, 1);
+  assert.ok(result.steps.find((step) => step.type === 'HAVING').compare.subquerySteps.length > 0);
+});
+
 test('nested subqueries', () => {
   const result = executeSql(`SELECT * FROM Products WHERE category_id IN (SELECT category_id FROM Categories WHERE category_id IN (SELECT DISTINCT category_id FROM Products WHERE stock > 0))`, createSeedDatabase());
   assert.equal(result.result.length, 6);
@@ -299,6 +352,33 @@ test('DATE filters run before SUM and COUNT aggregates', () => {
   assert.ok(Object.hasOwn(result.steps.find((step) => step.type === 'FROM').rows[0], 'Monto'));
 });
 
+test('HAVING explains aggregate filters and marks removed groups', () => {
+  const script = `CREATE TABLE FORMAS_PAGO (Cod INT PRIMARY KEY, Descrip VARCHAR(40));
+    CREATE TABLE VENTAS (Nro_Ticket INT PRIMARY KEY, Cod_forma_pago INT, Monto DECIMAL(10,2), FOREIGN KEY (Cod_forma_pago) REFERENCES FORMAS_PAGO(Cod));
+    INSERT INTO FORMAS_PAGO VALUES (1,'Efectivo'), (2,'Tarjeta'), (3,'Transferencia'), (4,'Cheque');
+    INSERT INTO VENTAS VALUES
+      (1,1,10), (2,1,20), (3,1,30), (4,1,40),
+      (5,2,50), (6,2,60), (7,2,70), (8,2,80), (9,2,90),
+      (10,3,100),
+      (11,4,110), (12,4,120), (13,4,130), (14,4,140), (15,4,150), (16,4,160);
+    SELECT F.Descrip, COUNT(*) AS "Veces Utilizado"
+    FROM FORMAS_PAGO F JOIN VENTAS V ON F.Cod = V.Cod_forma_pago
+    GROUP BY F.Descrip
+    HAVING COUNT(*) > 3;`;
+
+  const result = executeSqlScript(script, createSeedDatabase());
+  const having = result.steps.find((step) => step.type === 'HAVING');
+  assert.equal(result.result.length, 3);
+  assert.equal(having.count, 3);
+  assert.equal(having.compare.kind, 'filter');
+  assert.equal(having.compare.unit, 'grupos');
+  assert.equal(having.compare.beforeRows.length, 4);
+  assert.ok(having.detail.includes('COUNT(*)'));
+  assert.ok(having.rows.every((row) => Object.hasOwn(row, 'COUNT(*)')));
+  assert.ok(having.compare.beforeRows.some((row) => row.Descrip === 'Transferencia' && row['COUNT(*)'] === 1));
+  assert.equal(result.steps.find((step) => step.type === 'JOIN').compare.joinKeys[0].label, 'Cod = Cod_forma_pago');
+});
+
 test('step rows preserve all available rows for visual expansion', () => {
   let db = executeSql('CREATE TABLE TICKETS (Id INT PRIMARY KEY, Fecha DATE, Monto DECIMAL(10,2));', createSeedDatabase()).db;
   const values = Array.from({ length: 15 }, (_, index) => `(${index + 1},'2022-01-${String(index + 1).padStart(2, '0')}',${index + 1})`).join(',');
@@ -309,6 +389,24 @@ test('step rows preserve all available rows for visual expansion', () => {
   assert.equal(result.steps.find((step) => step.type === 'WHERE').rows.length, 15);
 });
 
+test('LIKE implements SQL wildcards and preserves FROM before WHERE filtering', () => {
+  const script = `CREATE TABLE MODELOS_TEST (Id INT PRIMARY KEY, Modelo VARCHAR(40));
+    INSERT INTO MODELOS_TEST VALUES (1,'XR1'), (2,'XR12'), (3,'AXRZ'), (4,'xR1'), (5,'ABCD');
+    SELECT Modelo FROM MODELOS_TEST WHERE Modelo LIKE '%XR%';`;
+  const result = executeSqlScript(script, createSeedDatabase());
+  assert.deepEqual(result.result.map((row) => row.Modelo), ['XR1', 'XR12', 'AXRZ']);
+  assert.equal(result.steps.find((step) => step.type === 'FROM').count, 5);
+  assert.equal(result.steps.find((step) => step.type === 'WHERE').count, 3);
+
+  const oneChar = executeSql("SELECT Modelo FROM MODELOS_TEST WHERE Modelo LIKE 'XR_';", result.db);
+  assert.deepEqual(oneChar.result.map((row) => row.Modelo), ['XR1']);
+
+  const noMatches = executeSql("SELECT Modelo FROM MODELOS_TEST WHERE Modelo LIKE '%ZZ%';", result.db);
+  assert.equal(noMatches.steps.find((step) => step.type === 'FROM').count, 5);
+  assert.equal(noMatches.steps.find((step) => step.type === 'WHERE').count, 0);
+  assert.equal(noMatches.result.length, 0);
+});
+
 test('NULL comparisons follow SQL three-valued logic', () => {
   const db = createSeedDatabase();
   assert.equal(executeSql('SELECT first_name FROM Customers WHERE email = NULL;', db).result.length, 0);
@@ -316,6 +414,156 @@ test('NULL comparisons follow SQL three-valued logic', () => {
   assert.equal(executeSql('SELECT first_name FROM Customers WHERE email IN (NULL);', db).result.length, 0);
   assert.equal(executeSql('SELECT first_name FROM Customers WHERE email NOT IN (NULL);', db).result.length, 0);
   assert.equal(executeSql('SELECT first_name FROM Customers WHERE email IS NULL;', db).result.length, 2);
+});
+
+test('set operators enforce union compatibility and treat NULL duplicates as equal', () => {
+  const db = executeSqlScript(`CREATE TABLE EMPLEADOS_SET (Dni INT, Apellido VARCHAR(40));
+    CREATE TABLE JEFES_SET (Dni INT, Area VARCHAR(40));
+    CREATE TABLE SET_A (Val INT);
+    CREATE TABLE SET_B (Val INT);
+    CREATE TABLE SET_TEXT (Val VARCHAR(20));
+    INSERT INTO EMPLEADOS_SET VALUES (1,'Jefe'), (2,'Perez'), (3,'Lopez');
+    INSERT INTO JEFES_SET VALUES (1,'Ventas');
+    INSERT INTO SET_A VALUES (1), (NULL), (NULL);
+    INSERT INTO SET_B VALUES (NULL), (2);
+    INSERT INTO SET_TEXT VALUES ('uno');`, createSeedDatabase()).db;
+
+  const except = executeSql('SELECT Dni FROM EMPLEADOS_SET EXCEPT SELECT Dni FROM JEFES_SET;', db);
+  assert.deepEqual(except.result.map((row) => row.Dni), [2, 3]);
+
+  const union = executeSql('SELECT Val FROM SET_A UNION SELECT Val FROM SET_B;', db);
+  assert.deepEqual([...new Set(union.result.map((row) => row.Val))].sort((a, b) => (a ?? -1) - (b ?? -1)), [null, 1, 2]);
+
+  const intersect = executeSql('SELECT Val FROM SET_A INTERSECT SELECT Val FROM SET_B;', db);
+  assert.deepEqual(intersect.result, [{ Val: null }]);
+
+  const minus = executeSql('SELECT Val FROM SET_A MINUS SELECT Val FROM SET_B;', db);
+  assert.deepEqual(minus.result, [{ Val: 1 }]);
+
+  assert.throws(() => executeSql('SELECT Val FROM SET_A UNION SELECT Val FROM SET_TEXT;', db), /Union incompatible/i);
+});
+
+test('date and conversion scalar functions work in SELECT, WHERE and DML assignments', () => {
+  const db = createSeedDatabase();
+  const now = executeSql('SELECT GETDATE() AS ahora FROM Customers WHERE customer_id = 1;', db).result[0].ahora;
+  assert.match(now, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+
+  const byYear = executeSql('SELECT order_id FROM Orders WHERE YEAR(order_date) = 2026;', db);
+  assert.equal(byYear.result.length, 5);
+
+  const castDate = executeSql("SELECT order_id FROM Orders WHERE order_date >= CAST('2026-03-01' AS DATE);", db);
+  assert.deepEqual(castDate.result.map((row) => row.order_id), [104, 105]);
+
+  const convertDate = executeSql("SELECT order_id FROM Orders WHERE order_date >= CONVERT(DATE, '2026-03-01');", db);
+  assert.deepEqual(convertDate.result.map((row) => row.order_id), [104, 105]);
+
+  const arithmetic = executeSql('SELECT name, stock + 1 AS next_stock FROM Products WHERE product_id = 6;', db);
+  assert.deepEqual(arithmetic.result, [{ name: 'Blender', next_stock: 1 }]);
+
+  const updated = executeSql("UPDATE Products SET stock = stock + 2 WHERE name = 'Blender';", db);
+  assert.equal(updated.db.Products.find((row) => row.name === 'Blender').stock, 2);
+});
+
+test('EXISTS, NOT EXISTS, ANY and SOME subqueries follow WHERE three-valued logic', () => {
+  const db = executeSqlScript(`CREATE TABLE NULL_COMPARE (Id INT, Val INT);
+    INSERT INTO NULL_COMPARE VALUES (1,1), (2,NULL);`, createSeedDatabase()).db;
+
+  const exists = executeSql(`SELECT first_name FROM Customers c
+    WHERE EXISTS (SELECT * FROM Orders o WHERE o.customer_id = c.customer_id)
+    ORDER BY first_name;`, db);
+  assert.deepEqual(exists.result.map((row) => row.first_name), ['Ana', 'Bruno', 'Carla', 'Diego']);
+
+  const notExists = executeSql(`SELECT first_name FROM Customers c
+    WHERE NOT EXISTS (SELECT 1 FROM Orders o WHERE o.customer_id = c.customer_id);`, db);
+  assert.deepEqual(notExists.result, [{ first_name: 'Elena' }]);
+
+  const any = executeSql('SELECT name FROM Products WHERE price > ANY (SELECT price FROM Products WHERE category_id = 2);', db);
+  assert.equal(any.result.length, 5);
+  assert.ok(any.result.every((row) => row.name !== 'Blender'));
+
+  const some = executeSql('SELECT name FROM Products WHERE price < SOME (SELECT price FROM Products WHERE category_id = 1);', db);
+  assert.equal(some.result.length, 5);
+  assert.ok(some.result.every((row) => row.name !== 'Laptop Pro'));
+
+  const unknown = executeSql('SELECT Id FROM NULL_COMPARE WHERE Val > ANY (SELECT Val FROM NULL_COMPARE WHERE Id = 2);', db);
+  assert.equal(unknown.result.length, 0);
+});
+
+test('subquery visual steps preserve filter and projection comparisons', () => {
+  const result = executeSql(`SELECT name
+    FROM Products
+    WHERE category_id IN (SELECT category_id FROM Products WHERE stock = 0);`, createSeedDatabase());
+  const subquerySteps = result.steps.find((step) => step.type === 'WHERE').compare.subquerySteps;
+  const innerWhere = subquerySteps.find((step) => step.type === 'WHERE');
+  const innerSelect = subquerySteps.find((step) => step.type === 'SELECT');
+  assert.equal(innerWhere.compare.kind, 'filter');
+  assert.ok(innerWhere.compare.beforeRows.length > innerWhere.rows.length);
+  assert.equal(innerSelect.compare.kind, 'project');
+  assert.ok(innerSelect.compare.removedColumns.includes('name'));
+});
+
+test('non-correlated HAVING subqueries are evaluated once and returned as a fixed set', () => {
+  const result = executeSql(`SELECT department, AVG(salary) AS avg_salary
+    FROM Employees
+    GROUP BY department
+    HAVING AVG(salary) >= ALL (
+      SELECT AVG(salary)
+      FROM Employees
+      GROUP BY department
+    );`, createSeedDatabase());
+  const having = result.steps.find((step) => step.type === 'HAVING');
+  assert.deepEqual(having.compare.subquerySteps.map((step) => step.type), ['FROM', 'GROUP BY', 'SELECT']);
+  assert.equal(having.compare.subqueryResults.length, 1);
+  assert.equal(having.compare.subqueryResults[0].mode, 'uncorrelated');
+  assert.deepEqual(having.compare.subqueryResults[0].values.sort((a, b) => a - b), [985000, 1350000]);
+});
+
+test('correlated EXISTS subqueries record an iteration per outer row with parameters', () => {
+  const result = executeSql(`SELECT first_name
+    FROM Customers c
+    WHERE EXISTS (SELECT * FROM Orders o WHERE o.customer_id = c.customer_id);`, createSeedDatabase());
+  const where = result.steps.find((step) => step.type === 'WHERE');
+  assert.equal(where.compare.subqueryResults.length, 5);
+  assert.ok(where.compare.subqueryResults.every((item) => item.mode === 'correlated'));
+  assert.deepEqual(where.compare.subqueryResults[0].parameters, [{ name: 'c.customer_id', value: 1 }]);
+  assert.deepEqual(where.compare.subqueryResults[0].conditionValues, [{ name: 'o.customer_id', value: 1 }, { name: 'c.customer_id', value: 1 }]);
+  assert.match(where.compare.subqueryResults[0].innerCondition, /o\.customer_id = c\.customer_id/);
+  assert.equal(where.compare.subqueryResults[0].verdict, 'TRUE');
+  assert.equal(where.compare.subqueryResults.at(-1).verdict, 'FALSE');
+  assert.match(where.compare.subqueryResults[0].evaluatedCondition, /1=1/);
+  assert.match(where.compare.subqueryResults.at(-1).evaluatedCondition, /1=0/);
+  assert.equal(new Set(where.compare.subquerySteps.map((step) => step.subqueryIteration)).size, 5);
+
+  const withStatus = executeSql(`SELECT first_name
+    FROM Customers c
+    WHERE EXISTS (SELECT * FROM Orders o WHERE o.customer_id = c.customer_id AND o.status = 'completed');`, createSeedDatabase());
+  const statusValues = withStatus.steps.find((step) => step.type === 'WHERE').compare.subqueryResults[0].conditionValues;
+  assert.deepEqual(statusValues, [{ name: 'o.customer_id', value: 1 }, { name: 'c.customer_id', value: 1 }, { name: 'o.status', value: 'completed' }]);
+});
+
+test('pedagogical validation errors match processing rules', () => {
+  const db = createSeedDatabase();
+  assert.throws(() => executeSql('SELECT name FROM Employees WHERE AVG(salary) > 50000;', db), /NUNCA va una función sumaria en el WHERE/);
+  assert.throws(() => executeSql('SELECT name, department, SUM(salary) FROM Employees GROUP BY department;', db), /Las columnas del SELECT sin función de grupo DEBEN estar en el GROUP BY/);
+  assert.throws(() => executeSql('SELECT * FROM Products WHERE category_id IN (SELECT category_id FROM Categories ORDER BY category_id);', db), /subconsulta no puede contener la cláusula ORDER BY/i);
+  assert.throws(() => executeSql('SELECT * FROM Products WHERE category_id IN (SELECT category_id FROM Categories UNION SELECT category_id FROM Products);', db), /No puede haber UNION de otros SELECT en una subconsulta/);
+  assert.throws(() => executeSql('SELECT c.first_name FROM Customers c JOIN Orders o ON customer_id = customer_id;', db), /Referencia de columna ambigua/);
+  assert.throws(() => executeSql("INSERT INTO Categories (category_id, name) VALUES (NULL, 'Books');", db), /La PK no puede asumir valor nulo/);
+});
+
+test('subquery theoretical restrictions return classroom-oriented errors', () => {
+  const db = createSeedDatabase();
+  assert.throws(() => executeSql('SELECT * FROM Employees WHERE (SELECT AVG(salary) FROM Employees) < salary;', db), /La subconsulta debe aparecer a la derecha del operador/);
+  assert.throws(() => executeSql('SELECT * FROM Employees WHERE employee_id = (SELECT employee_id, name FROM Employees WHERE employee_id = 1);', db), /La subconsulta debe devolver una única columna para este operador/);
+  assert.throws(() => executeSql('SELECT * FROM Employees WHERE salary = (SELECT salary FROM Employees);', db), /La subconsulta debe devolver una única fila para este operador/);
+  assert.throws(() => executeSql('SELECT * FROM Products WHERE price > SELECT AVG(price) FROM Products;', db), /La subconsulta debe estar encerrada entre paréntesis/);
+  assert.throws(() => executeSql('SELECT name, (SELECT department FROM Employees e2 WHERE e2.employee_id = e.employee_id) FROM Employees e;', db), /No se permiten subconsultas en la lista del SELECT/);
+  assert.throws(() => executeSql('SELECT * FROM Categories WHERE EXISTS (SELECT * FROM Products);', db), /EXISTS debe incluir una referencia externa/);
+});
+
+test('NOT NULL columns reject NULL inserts with a clear integrity error', () => {
+  const db = executeSql('CREATE TABLE NN_TEST (Id INT PRIMARY KEY, Nombre VARCHAR(40) NOT NULL);', createSeedDatabase()).db;
+  assert.throws(() => executeSql('INSERT INTO NN_TEST (Id, Nombre) VALUES (1, NULL);', db), /NOT NULL.*valor nulo/i);
 });
 
 test('multi-table queries reject ambiguous or implicit joins', () => {
@@ -360,6 +608,31 @@ test('DML and DDL reject unknown columns and invalid foreign keys', () => {
   assert.throws(() => executeSql('UPDATE Products SET missing = 1;', createSeedDatabase()), /no existe/);
   assert.throws(() => executeSql('CREATE TABLE BadChild (Id INT PRIMARY KEY, ParentId INT, FOREIGN KEY (ParentId) REFERENCES Missing(Id));', createSeedDatabase()), /referenciada/);
   assert.throws(() => executeSql('CREATE TABLE BadRef (Id INT PRIMARY KEY, ParentName VARCHAR(80), FOREIGN KEY (ParentName) REFERENCES Categories(name));', createSeedDatabase()), /PRIMARY KEY o UNIQUE/);
+});
+
+test('CREATE TABLE rejects misspelled keywords and missing commas', () => {
+  let db = executeSql('CREATE TABLE PADRES (Id INT PRIMARY KEY);', createSeedDatabase()).db;
+  assert.throws(() => executeSql('CREATE TABLE BadPk (Id INT PRIMARY KKEY);', db), /KKEY|sintaxis/i);
+  assert.throws(() => executeSql('CREATE TABLE BadFk (Id INT PRIMARY KEY, ParentId INT, FOREIGN KEY (ParentId) REFRENCES PADRES(Id));', db), /REFRENCES|sintaxis/i);
+  assert.throws(() => executeSql('CREATE TABLE MissingComma (Id INT PRIMARY KEY Nombre VARCHAR(50));', db), /Nombre VARCHAR|sintaxis/i);
+  assert.throws(() => executeSql('CREATE TABLE BadType (Id INTT PRIMARY KEY);', db), /tipo de dato "INTT"/i);
+  assert.throws(() => executeSql('ALTER TABLE PADRES ADD Extra INTT;', db), /tipo de dato "INTT"|variante/i);
+  assert.throws(() => executeSql('ALTER TABLE PADRES ADD Extra;', db), /variante de ALTER TABLE/i);
+});
+
+test('FOREIGN KEY structure must match referenced key columns and types', () => {
+  let db = executeSql('CREATE TABLE PADRES (Id INT PRIMARY KEY, Codigo VARCHAR(10) UNIQUE);', createSeedDatabase()).db;
+  assert.throws(() => executeSql('CREATE TABLE BadTypeFk (Id INT PRIMARY KEY, ParentId VARCHAR(10), FOREIGN KEY (ParentId) REFERENCES PADRES(Id));', db), /no coincide en tipos/i);
+  db = executeSql('CREATE TABLE PADRES_COMP (Modelo VARCHAR(100), Marca VARCHAR(100), PRIMARY KEY (Modelo, Marca));', db).db;
+  assert.throws(() => executeSql('CREATE TABLE BadCountFk (Id INT PRIMARY KEY, Modelo VARCHAR(100), FOREIGN KEY (Modelo) REFERENCES PADRES_COMP(Modelo, Marca));', db), /misma cantidad/i);
+  assert.doesNotThrow(() => executeSql('CREATE TABLE GoodCompositeFk (Modelo VARCHAR(100), Marca VARCHAR(100), Item INT PRIMARY KEY, FOREIGN KEY (Modelo, Marca) REFERENCES PADRES_COMP(Modelo, Marca));', db));
+});
+
+test('composite PRIMARY KEY enforces uniqueness and non-null components', () => {
+  let db = executeSql('CREATE TABLE CARACTxMOTO (Modelo VARCHAR(100), Marca VARCHAR(100), Cod_caract INT, Valor VARCHAR(40), PRIMARY KEY (Modelo, Marca, Cod_caract));', createSeedDatabase()).db;
+  db = executeSql("INSERT INTO CARACTxMOTO VALUES ('Wave','Honda',1,'125cc');", db).db;
+  assert.throws(() => executeSql("INSERT INTO CARACTxMOTO VALUES ('Wave','Honda',1,'Repetida');", db), /PRIMARY KEY|duplicada/i);
+  assert.throws(() => executeSql("INSERT INTO CARACTxMOTO VALUES ('Wave',NULL,2,'Sin marca');", db), /NULL.*Marca/i);
 });
 
 test('unsupported or malformed SQL returns a clear error', () => {

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { concepts, createSeedDatabase, examples } from './data/seed';
-import { executeSql, executeSqlScript } from './lib/sqlEngine';
+import { executeSql, executeSqlScript, splitSqlStatements } from './lib/sqlEngine';
 
 const hasTerminatingSemicolon = (input) => {
   let quoted = false; let lineComment = false; let blockComment = false; let last = '';
@@ -38,9 +38,11 @@ const Icon = ({ name, size = 18 }) => {
 };
 
 const rowSignature = (row) => JSON.stringify(Object.entries(row).filter(([key]) => !key.startsWith('__')).sort(([a], [b]) => a.localeCompare(b)));
+const findDisplayColumn = (columns, qualified, short) => columns.find((column) => column.toLowerCase() === qualified.toLowerCase()) || columns.find((column) => column.toLowerCase() === short.toLowerCase());
 
 function DataTable({ rows = [], compact = false, faded = false, compare = null }) {
   const [expanded, setExpanded] = useState(false);
+  const [expandedColumns, setExpandedColumns] = useState(false);
   const currentRows = rows.map((row) => ({ ...row, __diffStatus: 'kept' }));
   if (compare?.kind === 'insert') {
     const addedCounts = new Map((compare.addedRows || []).map((row) => [rowSignature(row), 0]));
@@ -51,24 +53,66 @@ function DataTable({ rows = [], compact = false, faded = false, compare = null }
       if (count > 0) { currentRows[i].__diffStatus = 'added'; addedCounts.set(signature, count - 1); }
     }
   }
+  if (compare?.kind === 'join' && compare.outerVirtualRows?.length) {
+    const virtualCounts = new Map();
+    compare.outerVirtualRows.forEach((row) => virtualCounts.set(rowSignature(row), (virtualCounts.get(rowSignature(row)) || 0) + 1));
+    for (let i = currentRows.length - 1; i >= 0; i -= 1) {
+      const signature = rowSignature(currentRows[i]);
+      const count = virtualCounts.get(signature) || 0;
+      if (count > 0) { currentRows[i].__diffStatus = 'added'; virtualCounts.set(signature, count - 1); }
+    }
+  }
   const currentSignatures = new Set(rows.map(rowSignature));
-  const removedRows = compare?.kind === 'filter' ? (compare.beforeRows || []).filter((row) => !currentSignatures.has(rowSignature(row))).map((row) => ({ ...row, __diffStatus: 'removed' })) : [];
+  const removedRows = ['filter', 'join'].includes(compare?.kind) ? (compare.beforeRows || []).filter((row) => !currentSignatures.has(rowSignature(row))).map((row) => ({ ...row, __diffStatus: 'removed' })) : [];
   const addedRowCount = currentRows.filter((row) => row.__diffStatus === 'added').length;
   const visualRows = [...currentRows, ...removedRows];
   const addedColumns = new Set(compare?.kind === 'join' ? compare.addedColumns || [] : []);
+  const removedColumns = new Set(compare?.kind === 'project' ? compare.removedColumns || [] : []);
   const allColumnNames = [...new Set(visualRows.flatMap((row) => Object.keys(row).filter((key) => !key.startsWith('__'))))];
-  const columns = allColumnNames;
+  const projectionSourceByIndex = compare?.kind === 'project' ? compare.beforeRows || [] : [];
+  const joinLinks = (compare?.joinKeys || []).map((pair) => {
+    const leftKey = findDisplayColumn(allColumnNames, pair.left, pair.leftColumn);
+    const rightKey = findDisplayColumn(allColumnNames, pair.right, pair.rightColumn);
+    return leftKey && rightKey && leftKey !== rightKey ? { ...pair, leftKey, rightKey } : null;
+  }).filter(Boolean);
+  const hiddenJoinColumns = new Set(joinLinks.flatMap((link) => [link.leftKey, link.rightKey]));
+  const joinKeyColumns = new Set(joinLinks.map((link) => link.label));
+  const columns = [...new Set([...allColumnNames.flatMap((column) => {
+    const link = joinLinks.find((item) => item.leftKey === column);
+    if (link) return [link.label];
+    return hiddenJoinColumns.has(column) ? [] : [column];
+  }), ...removedColumns])];
+  const tableRows = visualRows.map((row) => {
+    const next = { ...row };
+    joinLinks.forEach((link) => {
+      const leftValue = row[link.leftKey]; const rightValue = row[link.rightKey];
+      next[link.label] = leftValue === rightValue ? leftValue : leftValue == null && rightValue == null ? null : `${leftValue ?? 'NULL'} ↔ ${rightValue ?? 'NULL'}`;
+      delete next[link.leftKey]; delete next[link.rightKey];
+    });
+    return next;
+  }).map((row, index) => {
+    if (compare?.kind !== 'project') return row;
+    const source = projectionSourceByIndex[index] || {};
+    return { ...row, ...Object.fromEntries([...removedColumns].map((column) => [column, source[column]])) };
+  });
   if (!visualRows.length) return <div className="empty-table">Sin filas en esta etapa</div>;
   const limit = compact ? 6 : 10;
   const hasExtra = visualRows.length > limit;
-  const hasAddRemove = removedRows.length > 0 || addedRowCount > 0 || addedColumns.size > 0;
+  const columnLimit = compact ? 6 : 9;
+  const pinnedColumns = new Set([...addedColumns, ...removedColumns, ...joinKeyColumns]);
+  const baseColumns = columns.filter((column) => !pinnedColumns.has(column));
+  const visibleColumns = expandedColumns ? columns : [...baseColumns.slice(0, columnLimit), ...columns.filter((column) => pinnedColumns.has(column) && !baseColumns.slice(0, columnLimit).includes(column))];
+  const hasExtraColumns = columns.length > visibleColumns.length;
+  const hasAddRemove = removedRows.length > 0 || addedRowCount > 0 || addedColumns.size > 0 || removedColumns.size > 0;
+  const removedLabel = compare?.unit === 'grupos' ? 'grupos recortados' : compare?.kind === 'join' ? 'pares descartados por ON' : 'filas recortadas';
+  const columnClass = (column) => removedColumns.has(column) ? 'removed-column' : joinKeyColumns.has(column) ? 'join-key-column' : addedColumns.has(column) ? 'added-column' : compare?.comparedColumn === column ? 'compared-column' : '';
   return <div className={`table-wrap ${faded ? 'faded' : ''}`}>
     <table className={compact ? 'compact-table' : ''}>
-      <thead><tr>{columns.map((column) => <th className={addedColumns.has(column) ? 'added-column' : compare?.comparedColumn === column ? 'compared-column' : ''} key={column}>{column}</th>)}</tr></thead>
-      <tbody>{(expanded ? visualRows : visualRows.slice(0, limit)).map((row, index) => <tr className={row.__diffStatus === 'removed' ? 'removed-row' : row.__diffStatus === 'added' ? 'added-row' : ''} key={index}>{columns.map((column) => <td key={column} className={addedColumns.has(column) ? 'added-column' : compare?.comparedColumn === column ? 'compared-column' : ''}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>)}</tbody>
+      <thead><tr>{visibleColumns.map((column) => <th className={columnClass(column)} key={column}>{column}</th>)}</tr></thead>
+      <tbody>{(expanded ? tableRows : tableRows.slice(0, limit)).map((row, index) => <tr className={row.__diffStatus === 'removed' ? 'removed-row' : row.__diffStatus === 'added' ? 'added-row' : ''} key={index}>{visibleColumns.map((column) => <td key={column} className={columnClass(column)}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>)}</tbody>
     </table>
-    {hasExtra && <button className="more-rows-btn" onClick={(event) => { event.stopPropagation(); setExpanded(!expanded); }}>{expanded ? <><span className="collapse-circle">−</span> ocultar</> : <span>+ {visualRows.length - limit} filas</span>}</button>}
-    {hasAddRemove && <div className="comparison-legend">{removedRows.length > 0 && <span><i className="legend-dot removed" />filas recortadas</span>}{addedColumns.size > 0 && <span><i className="legend-dot added" />columnas agregadas</span>}{addedRowCount > 0 && <span><i className="legend-dot added" />filas agregadas</span>}</div>}
+    {(hasExtra || hasExtraColumns) && <div className="table-expand-controls">{hasExtraColumns && <button className="more-rows-btn" onClick={(event) => { event.stopPropagation(); setExpandedColumns(!expandedColumns); }}>{expandedColumns ? <><span className="collapse-circle">−</span> ocultar columnas</> : <span>+ {columns.length - visibleColumns.length} columnas</span>}</button>}{hasExtra && <button className="more-rows-btn" onClick={(event) => { event.stopPropagation(); setExpanded(!expanded); }}>{expanded ? <><span className="collapse-circle">−</span> ocultar filas</> : <span>+ {visualRows.length - limit} filas</span>}</button>}</div>}
+    {hasAddRemove && <div className="comparison-legend">{removedRows.length > 0 && <span><i className="legend-dot removed" />{removedLabel}</span>}{removedColumns.size > 0 && <span><i className="legend-dot removed" />columnas recortadas</span>}{addedColumns.size > 0 && <span><i className="legend-dot added" />columnas agregadas</span>}{addedRowCount > 0 && <span><i className="legend-dot added" />filas agregadas</span>}</div>}
   </div>;
 }
 
@@ -121,7 +165,7 @@ function SchemaPanel({ database, setDatabase, open, onClose }) {
         <span className="eyebrow">SANDBOX LOCAL</span>
         <h2><Icon name="database" /> Base de datos</h2>
       </div>
-      <button className="icon-button mobile-only" onClick={onClose} aria-label="Cerrar"><Icon name="close" /></button>
+      <button className="icon-button" onClick={onClose} aria-label="Cerrar"><Icon name="close" /></button>
     </div>
     <p className="muted">Los cambios viven solo en esta pestaña.</p>
 
@@ -209,22 +253,30 @@ function SchemaPanel({ database, setDatabase, open, onClose }) {
   </aside>;
 }
 
-const queryKeywords = (sql) => sql.match(/\b(?:SELECT|DISTINCT|FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL JOIN|JOIN|WHERE|GROUP BY|HAVING|ORDER BY|OFFSET|FETCH|VALUES|SET|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE|DROP TABLE|TRUNCATE TABLE|CREATE INDEX|CREATE VIEW)\b/gi) || [];
+const queryKeywords = (sql) => sql.match(/\b(?:SELECT|DISTINCT|FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL JOIN|JOIN|WHERE|GROUP BY|HAVING|ORDER BY|UNION|INTERSECT|EXCEPT|EXISTS|ANY|SOME|ALL|GETDATE|YEAR|CAST|CONVERT|OFFSET|FETCH|VALUES|SET|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE|DROP TABLE|TRUNCATE TABLE|CREATE INDEX|CREATE VIEW)\b/gi) || [];
+const sqlFileAccept = '.sql,.txt';
+const isSqlImportFile = (fileName) => /\.(sql|txt)$/i.test(fileName);
 
-function Editor({ sql, setSql, onRun, onStep, onReset, onImportSqlFile, selectedExample, setSelectedExample, error, importMessage, activeClause }) {
+function Editor({ sql, setSql, setError, setImportMessage, onRun, onStep, onReset, onImportSqlFile, selectedExample, setSelectedExample, error, importMessage, activeClause, stepMode }) {
   const textarea = useRef(null);
   const fileInput = useRef(null);
   const lineCount = sql.split('\n').length;
   const handleFile = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (!isSqlImportFile(file.name)) {
+      setError('Solo se pueden importar archivos .sql o .txt con instrucciones SQL.');
+      setImportMessage('');
+      event.target.value = '';
+      return;
+    }
     await onImportSqlFile(await file.text(), file.name);
     event.target.value = '';
   };
   return <section className="editor-card">
     <div className="editor-toolbar">
       <div><span className="status-dot" /><strong>Editor SQL</strong><span className="dialect">SQL Server compatible</span></div>
-      <div className="editor-toolbar-tools"><button className="import-file-button" onClick={() => fileInput.current?.click()}><Icon name="upload" /> Importar .sql</button><input ref={fileInput} type="file" accept=".sql,text/sql,.txt" hidden onChange={handleFile} /><div className="example-picker"><label htmlFor="examples">Ejemplo</label><select id="examples" value={selectedExample} onChange={(e) => { const val = e.target.value; setSelectedExample(val); if (!val) { setSql(''); setError(''); setImportMessage(''); } }}><option value="">Seleccionar</option>{examples.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></div></div>
+      <div className="editor-toolbar-tools"><button className="import-file-button" onClick={() => fileInput.current?.click()}><Icon name="upload" /> Importar Archivo SQL</button><input ref={fileInput} type="file" accept={sqlFileAccept} hidden onChange={handleFile} /><div className="example-picker"><label htmlFor="examples">Ejemplo</label><select id="examples" value={selectedExample} onChange={(e) => { const val = e.target.value; setSelectedExample(val); if (!val) { setSql(''); setError(''); setImportMessage(''); } }}><option value="">Seleccionar</option>{examples.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></div></div>
     </div>
     <div className="code-editor">
       <div className="line-numbers">{Array.from({ length: lineCount }, (_, i) => <span key={i}>{i + 1}</span>)}</div>
@@ -241,7 +293,7 @@ function Editor({ sql, setSql, onRun, onStep, onReset, onImportSqlFile, selected
     {importMessage && <div className="success-message"><strong>Archivo SQL importado.</strong> {importMessage}</div>}
     <div className="editor-footer">
       <span className="shortcut"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> para ejecutar</span>
-      <div className="actions"><button className="ghost-button" onClick={onReset}><Icon name="reset" /> Reset</button><button className="secondary-button" onClick={onStep}><Icon name="steps" /> Paso a paso</button><button className="primary-button" onClick={onRun}><Icon name="play" /> Ejecutar</button></div>
+      <div className="actions"><button className="ghost-button" onClick={onReset}><Icon name="reset" /> Reset</button><button className={stepMode ? 'primary-button' : 'secondary-button'} aria-pressed={stepMode} onClick={onStep}><Icon name="steps" /> Paso a paso</button><button className="primary-button" onClick={onRun}><Icon name="play" /> Ejecutar</button></div>
     </div>
   </section>;
 }
@@ -271,6 +323,9 @@ const writtenOrderIndex = (sql, step, index) => {
     'GROUP BY': /\bGROUP\s+BY\b/,
     HAVING: /\bHAVING\b/,
     'ORDER BY': /\bORDER\s+BY\b/,
+    UNION: /\bUNION\b/,
+    INTERSECT: /\bINTERSECT\b/,
+    EXCEPT: /\bEXCEPT\b|\bMINUS\b/,
     LIMIT: /\b(?:LIMIT|OFFSET|FETCH|TOP)\b/,
     VALUES: /\bVALUES\b/,
     SET: /\bSET\b/,
@@ -284,46 +339,287 @@ const writtenOrderIndex = (sql, step, index) => {
   return (match ? match.index : index * 1000) + index / 100;
 };
 
-function Journey({ execution, activeStep, setActiveStep, showAll, stepMode, sql }) {
+const SUBQUERY_STEP_TYPE = '↳ SUBCONSULTA';
+const hasSubqueryTrace = (step) => Boolean(step?.compare?.subquerySteps?.length);
+const subqueryGroupKey = (summary, index) => summary.mode === 'correlated'
+  ? `correlated|${summary.operator}|${summary.innerSql || summary.innerCondition || ''}`
+  : `plain|${summary.id ?? index}`;
+
+function buildSubqueryGroups(compare) {
+  const steps = compare?.subquerySteps || [];
+  if (!steps.length) return [];
+  const summaries = compare.subqueryResults?.length ? compare.subqueryResults : [{ id: 'legacy', mode: 'uncorrelated', operator: 'SUBCONSULTA', rowCount: steps.at(-1)?.count || 0, values: [] }];
+  const traced = steps.some((step) => step.subqueryTraceId != null);
+  const groups = [];
+  const byKey = new Map();
+  summaries.forEach((summary, index) => {
+    const key = subqueryGroupKey(summary, index);
+    if (!byKey.has(key)) {
+      const group = { key, summaries: [], steps, traced, externalRows: compare.beforeRows || [], mode: summary.mode, order: groups.length };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    byKey.get(key).summaries.push(summary);
+  });
+  return groups;
+}
+
+function subqueryRows(group) {
+  const firstSummary = group.summaries[0];
+  const matchingSteps = group.traced && firstSummary?.id != null ? group.steps.filter((step) => step.subqueryTraceId === firstSummary.id) : group.steps;
+  return matchingSteps.at(-1)?.rows || [];
+}
+
+function subqueryStepTitle(parentStep, group, index, total) {
+  const suffix = total > 1 ? ` ${index + 1}` : '';
+  return group.mode === 'correlated' ? `Subconsulta correlacionada${suffix} de ${parentStep.type}` : `Subconsulta${suffix} de ${parentStep.type}`;
+}
+
+function buildVisualSteps(execution) {
+  if (!execution) return [];
+  return execution.steps.flatMap((item, originalIndex) => {
+    const mainStep = { id: `main-${originalIndex}`, kind: 'main', item, parentStep: item, originalIndex, orderOffset: 0 };
+    const groups = buildSubqueryGroups(item.compare);
+    return [mainStep, ...groups.map((group, groupIndex) => {
+      const rows = subqueryRows(group);
+      return {
+        id: `subquery-${originalIndex}-${groupIndex}`,
+        kind: 'subquery',
+        originalIndex,
+        parentStep: item,
+        orderOffset: (groupIndex + 1) / 100,
+        item: {
+          type: SUBQUERY_STEP_TYPE,
+          title: subqueryStepTitle(item, group, groupIndex, groups.length),
+          detail: group.mode === 'correlated' ? 'La subconsulta se ejecuta una vez por cada fila externa. Usá las iteraciones para ver qué valor se inyecta y qué devuelve cada ciclo.' : 'La subconsulta se ejecuta como recorrido interno y su resultado vuelve a la condición externa.',
+          rows,
+          count: group.mode === 'correlated' ? group.summaries.length : rows.length,
+          accent: 'amber',
+          parentType: item.type,
+          subqueryGroup: group,
+          parentStep: item
+        }
+      };
+    })];
+  });
+}
+
+function hideSubquerySql(condition) {
+  let output = '';
+  for (let index = 0; index < condition.length; index += 1) {
+    const char = condition[index];
+    if (char === "'") {
+      let end = index + 1;
+      while (end < condition.length) {
+        if (condition[end] === "'" && condition[end + 1] === "'") { end += 2; continue; }
+        if (condition[end] === "'") { end += 1; break; }
+        end += 1;
+      }
+      output += condition.slice(index, end);
+      index = end - 1;
+      continue;
+    }
+    if (char === '(' && /^\s*SELECT\b/i.test(condition.slice(index + 1))) {
+      let depth = 0; let quoted = false; let end = index;
+      for (; end < condition.length; end += 1) {
+        const current = condition[end];
+        if (current === "'" && condition[end + 1] === "'") { end += 1; continue; }
+        if (current === "'") { quoted = !quoted; continue; }
+        if (quoted) continue;
+        if (current === '(') depth += 1;
+        if (current === ')') {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+      }
+      output += '(resultado de la subconsulta)';
+      index = end;
+      continue;
+    }
+    output += char;
+  }
+  return output;
+}
+
+const parentConditionText = (step) => hideSubquerySql((step.detail || '').split(/\.\s+Se conservan/i)[0]);
+const parentStepDetail = (step) => {
+  if (!hasSubqueryTrace(step)) return step.detail;
+  const countText = (step.detail || '').match(/Se conservan[\s\S]*$/i)?.[0] || '';
+  return `${parentConditionText(step)}. ${countText}`.trim();
+};
+
+function JoinKeyNote({ compare }) {
+  const keys = compare?.joinKeys || [];
+  if (!keys.length) return null;
+  const pairs = keys.map((key) => `[${key.left}] y [${key.right}]`).join(', ');
+  return <div className="join-note"><strong>Punto de unión</strong><p>FROM arma primero el producto cartesiano candidato; ON conserva solo los pares donde {pairs} cumplen la relación PK = FK.</p>{compare.outerVirtualRows?.length > 0 && <p>Como es un OUTER JOIN, las filas sin pareja no se pierden: se completa el lado faltante con <code>NULL</code>.</p>}{compare.selectAll && <p>Con <code>SELECT *</code> ambas columnas pertenecen a tablas distintas aunque tengan el mismo valor; si hay ambigüedad, cualificalas como <code>{keys[0].left}</code>.</p>}</div>;
+}
+
+const formatSubqueryValue = (value) => value == null ? 'NULL' : typeof value === 'string' ? `'${value}'` : String(value);
+const conditionWithValues = (summary, condition) => {
+  if (!summary.conditionValues?.length) return condition;
+  const values = new Map(summary.conditionValues.map((item) => [item.name.toLowerCase(), item.value]));
+  return condition.replace(/\b[A-Za-z_]\w*\.[A-Za-z_]\w*\b/g, (identifier) => values.has(identifier.toLowerCase()) ? `${identifier} (${formatSubqueryValue(values.get(identifier.toLowerCase()))})` : identifier);
+};
+const subqueryReturnText = (summary) => {
+  if (/EXISTS/i.test(summary.operator || '')) return `${summary.operator}: ${summary.verdict || (summary.rowCount > 0 ? 'TRUE' : 'FALSE')} (${summary.rowCount} filas)`;
+  if (!summary.values?.length) return 'conjunto vacío';
+  const values = summary.values.map(formatSubqueryValue).join(', ');
+  return summary.rowCount === 1 ? `valor ${values}` : `conjunto { ${values}${summary.rowCount > summary.values.length ? ', ...' : ''} }`;
+};
+const subqueryConditionText = (summary) => {
+  const inner = summary.innerCondition || 'la condición interna';
+  const annotatedInner = conditionWithValues(summary, inner);
+  if (/EXISTS/i.test(summary.operator || '')) return `¿Existe alguna fila que cumpla ${annotatedInner}?`;
+  if (/ANY|SOME|ALL/i.test(summary.operator || '')) return `Se compara el valor externo contra el conjunto devuelto por la subconsulta usando ${summary.operator}.`;
+  if (/IN/i.test(summary.operator || '')) return `Se verifica pertenencia contra la columna devuelta por la subconsulta.`;
+  return `Se evalúa ${summary.evaluatedCondition || annotatedInner}.`;
+};
+const subqueryVerdictText = (summary) => summary.verdict ? `Resultado: ${summary.verdict} (${summary.rowCount} ${summary.rowCount === 1 ? 'fila' : 'filas'})` : `Retorno: ${subqueryReturnText(summary)}`;
+const parameterText = (summary) => summary.parameters?.length ? summary.parameters.map((param) => `${param.name} = ${formatSubqueryValue(param.value)}`).join(', ') : 'sin parámetro externo';
+
+function ParameterChips({ summary }) {
+  if (!summary.parameters?.length) return <span>Parámetro: sin referencia externa detectada</span>;
+  return <div className="subquery-keyline"><span>Llave de correlación</span>{summary.parameters.map((param) => <code className="external-key" key={param.name}>{param.name} = {formatSubqueryValue(param.value)}</code>)}</div>;
+}
+
+function ShortCircuitNote({ summary }) {
+  if (!/EXISTS/i.test(summary.operator || '')) return null;
+  return <div className="subquery-short-circuit"><b>Ciclo Corto de EXISTS</b><span>El motor se detiene apenas encuentra una fila interna que cumple la condición. No evalúa el contenido de esa fila: solo necesita saber si existe al menos una coincidencia.</span></div>;
+}
+
+function SubqueryCycleDetail({ summary }) {
+  if (summary.mode !== 'correlated') return null;
+  return <div className="subquery-cycle-detail"><div><b>Inyección de parámetro</b><ParameterChips summary={summary} /></div><div><b>Condición evaluada</b><span>{subqueryConditionText(summary)}</span></div><div><b>Veredicto del ciclo</b><span>{subqueryVerdictText(summary)}</span></div><ShortCircuitNote summary={summary} /></div>;
+}
+
+function SubqueryStepCard({ step, index }) {
+  return <div className="subquery-flow-item" key={`${step.subqueryTraceId || 'legacy'}-${step.type}-${index}`}>{index > 0 && <div className="flow-arrow"><span>↓</span><small>{step.type}</small></div>}<article className={`stage-card accent-${step.accent} subquery-card`}><header><div className="stage-number">{index + 1}</div><div><span className="clause-chip">{step.type}</span><h3>{step.title}</h3></div><strong>{step.count} {step.count === 1 ? 'fila' : 'filas'}</strong></header><p>{step.detail}</p><DataTable rows={step.rows} compact compare={step.compare} /><JoinKeyNote compare={step.type === 'JOIN' ? step.compare : null} /></article></div>;
+}
+
+function SubqueryBranch({ summary, steps, traced, compactHeader = false, hideCycleDetail = false }) {
+  const currentSteps = traced ? steps.filter((step) => step.subqueryTraceId === summary.id) : steps;
+  const correlated = summary.mode === 'correlated';
+  return <section className={`subquery-branch ${correlated ? 'correlated' : 'uncorrelated'} ${compactHeader ? 'carousel-slide' : ''}`}><div className="subquery-branch-head"><strong>{correlated ? `Iteración N${summary.iteration}` : 'Evaluación única'}</strong><span>{correlated ? 'subconsulta correlacionada' : 'subconsulta no correlacionada'}</span></div>{!hideCycleDetail && <SubqueryCycleDetail summary={summary} />}{currentSteps.map((sqStep, sqIndex) => <SubqueryStepCard step={sqStep} index={sqIndex} key={`${summary.id || 'legacy'}-${sqIndex}`} />)}{!hideCycleDetail && <div className="subquery-return"><span>Retorno a la condición</span><code>{subqueryReturnText(summary)}</code></div>}</section>;
+}
+
+function ExternalIterationTable({ rows = [], activeIndex, summary }) {
+  if (!rows.length) return null;
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row).filter((key) => !key.startsWith('__'))))].slice(0, 6);
+  const verdictClass = summary.verdict === 'TRUE' ? 'passes-true' : summary.verdict === 'FALSE' ? 'passes-false' : 'passes-unknown';
+  return <aside className="external-row-panel"><div className="external-row-head"><strong>Tabla externa</strong><span>Fila evaluada por WHERE/HAVING</span></div><div className="external-table-wrap"><table><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr className={index === activeIndex ? `current ${verdictClass}` : ''} key={index}>{columns.map((column) => <td key={column}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>)}</tbody></table></div><p>La fila resaltada es la que inyecta su llave en la subconsulta. Verde pasa el filtro; rojo se descarta.</p></aside>;
+}
+
+function CorrelatedSubqueryCarousel({ summaries, steps, traced, externalRows }) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [showInternalTrace, setShowInternalTrace] = useState(false);
+  const total = summaries.length;
+  const index = Math.min(activeIndex, Math.max(total - 1, 0));
+  const summary = summaries[index];
+  if (!summary) return null;
+  return <div className="subquery-carousel"><div className="subquery-carousel-head"><button className="subquery-nav-button" disabled={index === 0} onClick={(event) => { event.stopPropagation(); setActiveIndex((value) => Math.max(value - 1, 0)); }} aria-label="Iteración anterior">←</button><div className="subquery-carousel-title"><strong>Iteración {index + 1} de {total}</strong><span>El motor ejecuta esta subconsulta por cada fila externa antes de avanzar al siguiente paso de la regla.</span></div><button className="subquery-nav-button" disabled={index === total - 1} onClick={(event) => { event.stopPropagation(); setActiveIndex((value) => Math.min(value + 1, total - 1)); }} aria-label="Iteración siguiente">→</button></div><div className="subquery-carousel-body"><div className="subquery-cycle-shell"><SubqueryCycleDetail summary={summary} /><div className="subquery-return"><span>Resultado del ciclo</span><code>{subqueryReturnText(summary)}</code></div><button className="subquery-trace-toggle" onClick={(event) => { event.stopPropagation(); setShowInternalTrace((value) => !value); }}>{showInternalTrace ? 'Ocultar ejecución interna' : 'Ver ejecución interna'}</button>{showInternalTrace && <SubqueryBranch summary={summary} steps={steps} traced={traced} compactHeader hideCycleDetail />}</div><ExternalIterationTable rows={externalRows} activeIndex={index} summary={summary} /></div><p className="subquery-carousel-note">Aunque navegues las iteraciones, conceptualmente el motor repite este ciclo fila externa → subconsulta → retorno → decisión antes de pasar a SELECT u ORDER BY.</p></div>;
+}
+
+function SubqueryQueryBlock({ group }) {
+  const query = group.summaries.find((summary) => summary.innerSql)?.innerSql;
+  if (!query) return null;
+  return <div className="subquery-query-block"><strong>Consulta interna</strong><code>{query}</code></div>;
+}
+
+function SubqueryGroupFlow({ group }) {
+  const correlatedSummaries = group.summaries.filter((summary) => summary.mode === 'correlated');
+  const plainSummaries = group.summaries.filter((summary) => summary.mode !== 'correlated');
+  return <div className="subquery-nested standalone"><div className="subquery-label">↳ Subconsulta</div><SubqueryQueryBlock group={group} />{correlatedSummaries.length ? <CorrelatedSubqueryCarousel summaries={correlatedSummaries} steps={group.steps} traced={group.traced} externalRows={group.externalRows} /> : plainSummaries.map((summary, summaryIndex) => <SubqueryBranch summary={summary} steps={group.steps} traced={group.traced} key={summary.id || summaryIndex} />)}</div>;
+}
+
+function SubqueryFlow({ compare, group }) {
+  const groups = group ? [group] : buildSubqueryGroups(compare);
+  if (!groups.length) return null;
+  return <>{groups.map((item) => <SubqueryGroupFlow group={item} key={item.key} />)}</>;
+}
+
+function SubqueryDependencyNote({ step }) {
+  if (!hasSubqueryTrace(step)) return null;
+  return <div className="subquery-parent-note"><strong>Condición con subconsulta</strong><code>{parentConditionText(step)}</code><p>La condición utiliza una subconsulta. En el siguiente paso se muestra cómo se obtiene su resultado.</p></div>;
+}
+
+function JourneyStepCard({ step, displayIndex, focused, highlighted, showArrow, onSelect }) {
+  const item = step.item;
+  if (step.kind === 'subquery') {
+    return <div className="flow-item" id={`visual-step-${step.id}`} key={step.id}>{showArrow && <div className="flow-arrow"><span>↓</span><small>{item.type}</small></div>}<article className={`stage-card accent-${item.accent} subquery-stage ${focused ? 'focused' : ''} ${highlighted ? 'jump-highlight' : ''}`} onClick={onSelect}><header><div className="stage-number">{displayIndex}</div><div><span className="clause-chip">{item.type}</span><h3>{item.title}</h3></div><strong>{item.count} {item.count === 1 ? 'ciclo' : 'ciclos'}</strong></header><p>{item.detail}</p><SubqueryFlow group={item.subqueryGroup} /></article></div>;
+  }
+  return <div className="flow-item" id={`visual-step-${step.id}`} key={step.id}>{showArrow && <div className="flow-arrow"><span>↓</span><small>{item.type}</small></div>}<article className={`stage-card accent-${item.accent} ${focused ? 'focused' : ''} ${highlighted ? 'jump-highlight' : ''}`} onClick={onSelect}><header><div className="stage-number">{displayIndex}</div><div><span className="clause-chip">{item.type}</span><h3>{item.title}</h3></div><strong>{item.count} {item.count === 1 ? 'fila' : 'filas'}</strong></header><p>{parentStepDetail(item)}</p><SubqueryDependencyNote step={item} /><DataTable rows={item.rows} compact compare={item.compare} /><JoinKeyNote compare={item.type === 'JOIN' ? item.compare : null} /></article></div>;
+}
+
+function Journey({ execution, visualSteps, activeStep, setActiveStep, showAll, setShowAll, stepMode, setStepMode, sql }) {
   const [orderMode, setOrderMode] = useState('logical');
-  const orderedSteps = useMemo(() => execution ? execution.steps.map((item, index) => ({ item, originalIndex: index })).sort((a, b) => orderMode === 'logical' ? a.originalIndex - b.originalIndex : writtenOrderIndex(sql, a.item, a.originalIndex) - writtenOrderIndex(sql, b.item, b.originalIndex)) : [], [execution, orderMode, sql]);
+  const [highlightedStep, setHighlightedStep] = useState(null);
+  const orderedSteps = useMemo(() => execution ? visualSteps.map((step, index) => ({ step, visualIndex: index })).sort((a, b) => orderMode === 'logical' ? a.visualIndex - b.visualIndex : (writtenOrderIndex(sql, a.step.parentStep, a.step.originalIndex) + a.step.orderOffset) - (writtenOrderIndex(sql, b.step.parentStep, b.step.originalIndex) + b.step.orderOffset)) : [], [execution, orderMode, sql, visualSteps]);
   if (!execution) return <section className="welcome-state"><div className="welcome-graphic"><span>SELECT</span><i /><span>FROM</span><i /><span>WHERE</span></div><h2>Tu consulta se convertirá en un recorrido</h2><p>Elige un ejemplo o escribe SQL. Verás cómo cada cláusula transforma los datos.</p></section>;
-  const activeVisibleIndex = Math.max(orderedSteps.findIndex((entry) => entry.originalIndex === activeStep), 0);
+  const activeVisibleIndex = Math.max(orderedSteps.findIndex((entry) => entry.visualIndex === activeStep), 0);
   const showAllSteps = showAll || orderMode === 'written';
-  const visible = showAllSteps ? orderedSteps : orderedSteps.slice(0, activeVisibleIndex + 1);
+  const visible = showAllSteps ? orderedSteps : orderedSteps.slice(activeVisibleIndex, activeVisibleIndex + 1);
+  const navigateToStep = (step, visualIndex) => {
+    setActiveStep(visualIndex);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const target = document.getElementById(`visual-step-${step.id}`);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      window.setTimeout(() => {
+        setHighlightedStep(step.id);
+        window.setTimeout(() => setHighlightedStep((current) => current === step.id ? null : current), 1000);
+      }, target ? 350 : 0);
+    }));
+  };
   return <section className="journey">
-    <div className="section-title journey-title"><div><span className="eyebrow">RECORRIDO DE LA CONSULTA</span><h2>{orderMode === 'logical' ? 'Orden lógico de ejecución' : 'Orden escrito'}</h2></div><div className="journey-tools"><div className="order-switch" role="group" aria-label="Tipo de orden"><button className={orderMode === 'logical' ? 'active' : ''} onClick={() => setOrderMode('logical')}>Orden lógico</button><button className={orderMode === 'written' ? 'active' : ''} onClick={() => setOrderMode('written')}>Orden escrito</button></div><span className="result-badge">{execution.message}</span></div></div>
-    <div className="logical-order">{orderedSteps.map(({ item, originalIndex }, index) => <button key={`${item.type}-${originalIndex}`} className={originalIndex === activeStep ? 'active' : index < activeVisibleIndex || showAllSteps ? 'done' : ''} onClick={() => setActiveStep(originalIndex)}><span>{index + 1}</span>{item.type}</button>)}</div>
-    <div className="flow">{visible.map(({ item, originalIndex }, index) => <div className="flow-item" key={`${item.type}-${originalIndex}`}>
-      {index > 0 && <div className="flow-arrow"><span>↓</span><small>{item.type}</small></div>}
-      <article className={`stage-card accent-${item.accent} ${originalIndex === activeStep || showAllSteps ? 'focused' : ''}`} onClick={() => setActiveStep(originalIndex)}>
-        <header><div className="stage-number">{index + 1}</div><div><span className="clause-chip">{item.type}</span><h3>{item.title}</h3></div><strong>{item.count} {item.count === 1 ? 'fila' : 'filas'}</strong></header>
-        <p>{item.detail}</p><DataTable rows={item.rows} compact compare={item.compare} />
-        {item.compare?.subquerySteps?.length > 0 && <div className="subquery-nested"><div className="subquery-label">↳ Subconsulta</div>{item.compare.subquerySteps.map((sqStep, sqIndex) => <div className="subquery-flow-item" key={sqIndex}>{sqIndex > 0 && <div className="flow-arrow"><span>↓</span><small>{sqStep.type}</small></div>}<article className={`stage-card accent-${sqStep.accent} subquery-card`}><header><div className="stage-number">{sqIndex + 1}</div><div><span className="clause-chip">{sqStep.type}</span><h3>{sqStep.title}</h3></div><strong>{sqStep.count} {sqStep.count === 1 ? 'fila' : 'filas'}</strong></header><p>{sqStep.detail}</p><DataTable rows={sqStep.rows} compact /></article></div>)}</div>}
-      </article>
-    </div>)}</div>
-    {!showAll && orderMode === 'logical' && <div className="step-controls"><button disabled={activeStep === 0} onClick={() => setActiveStep((s) => s - 1)}>Anterior</button><span>Paso {activeStep + 1} de {execution.steps.length}</span><button disabled={activeStep === execution.steps.length - 1} onClick={() => setActiveStep((s) => s + 1)}>Siguiente</button></div>}
+    <div className="section-title journey-title"><div><span className="eyebrow">RECORRIDO DE LA CONSULTA</span><h2>{orderMode === 'logical' ? 'Orden lógico de ejecución' : 'Orden escrito'}</h2></div><div className="journey-tools"><div className="order-switch" role="group" aria-label="Tipo de orden"><button className={orderMode === 'logical' ? 'active' : ''} onClick={() => setOrderMode('logical')}>Orden lógico</button><button className={orderMode === 'written' ? 'active' : ''} onClick={() => { setOrderMode('written'); setStepMode(false); setShowAll(true); }}>Orden escrito</button></div><span className="result-badge">{execution.message}</span></div></div>
+    <div className="logical-order">{orderedSteps.map(({ step, visualIndex }, index) => <React.Fragment key={step.id}>{index > 0 && <i className="logical-order-arrow">→</i>}<button className={`${visualIndex === activeStep ? 'active' : index < activeVisibleIndex || showAllSteps ? 'done' : ''} ${step.kind === 'subquery' ? 'subquery-order-step' : ''}`} onClick={() => navigateToStep(step, visualIndex)}><span>{index + 1}</span>{step.item.type}</button></React.Fragment>)}</div>
+    <div className="flow">{visible.map(({ step, visualIndex }, index) => {
+      const displayIndex = showAllSteps ? index + 1 : activeVisibleIndex + 1;
+      return <JourneyStepCard step={step} displayIndex={displayIndex} focused={visualIndex === activeStep || showAllSteps} highlighted={highlightedStep === step.id} showArrow={showAllSteps && index > 0} onSelect={() => setActiveStep(visualIndex)} key={step.id} />;
+    })}</div>
+    {!showAll && orderMode === 'logical' && <div className="step-controls"><button disabled={activeVisibleIndex === 0} onClick={() => setActiveStep(orderedSteps[activeVisibleIndex - 1]?.visualIndex ?? activeStep)}>Anterior</button><span>Paso {activeVisibleIndex + 1} de {orderedSteps.length}: {orderedSteps[activeVisibleIndex]?.step.item.type}</span><button disabled={activeVisibleIndex === orderedSteps.length - 1} onClick={() => setActiveStep(orderedSteps[activeVisibleIndex + 1]?.visualIndex ?? activeStep)}>Siguiente</button></div>}
   </section>;
 }
 
-function ExplainPanel({ execution, activeStep, tab, setTab, history, onHistory }) {
-  const current = execution?.steps[activeStep];
-  return <aside className="explain-panel">
-    <div className="tabs"><button className={tab === 'explain' ? 'active' : ''} onClick={() => setTab('explain')}><Icon name="bulb" /> Explicación</button><button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}><Icon name="history" /> Historial</button></div>
-    {tab === 'history' ? <div className="history-list"><h3>Consultas recientes</h3>{history.length ? history.map((item, i) => <button key={`${item.time}-${i}`} onClick={() => onHistory(item.sql)}><code>{item.sql.replace(/\s+/g, ' ').slice(0, 68)}</code><span>{item.time}</span></button>) : <p className="muted">Todavía no ejecutaste consultas.</p>}</div> : current ? <div className="explanation">
+function ExplainPanel({ visualSteps, activeStep, stepMode, open, onClose }) {
+  const current = visualSteps[activeStep]?.item;
+  return <aside className={`explain-panel ${open ? 'open' : ''}`}>
+    <div className="drawer-head explain-drawer-head"><div><span className="eyebrow">EXPLICACIÓN</span><h2><Icon name="bulb" /> Guía contextual</h2></div><button className="icon-button" onClick={onClose} aria-label="Cerrar explicación"><Icon name="close" /></button></div>
+    {current ? <div className="explanation">
       <span className={`large-chip accent-${current.accent}`}>{current.type}</span><h2>{current.title}</h2>
       <div className="explain-block"><h4>Qué hace esta cláusula</h4><p>{current.detail}</p></div>
       <div className="explain-block"><h4>Cómo se ejecuta</h4><p>{explanationFor(current.type)}</p></div>
+      {stepMode && <div className="step-insight"><strong>Lectura del paso</strong><p>{guideForStep(current)}</p><p>{debugHintForStep(current)}</p></div>}
       <div className="explain-block"><h4>Ejemplo</h4><code className="inline-example">{exampleFor(current.type)}</code></div>
       <div className="metric"><span>Resultado intermedio</span><strong>{current.count}</strong><small>{current.count === 1 ? 'fila disponible' : 'filas disponibles'}</small></div>
-      <div className="tip"><strong>Notas</strong><p>{noteFor(current.type)}</p></div>
+      <div className="tip"><strong>Notas</strong><p>{noteForStep(current.type)}</p></div>
     </div> : <div className="explanation placeholder"><Icon name="bulb" size={32} /><h3>Explicación contextual</h3><p>Ejecuta una consulta y selecciona una etapa para entender qué ocurre.</p></div>}
   </aside>;
 }
 
-const explanationFor = (type) => ({ FROM: 'El motor localiza la fuente y crea el conjunto inicial.', JOIN: 'Compara la condición ON fila por fila y combina coincidencias.', WHERE: 'Evalúa la condición para cada fila; solo las verdaderas continúan.', 'GROUP BY': 'Construye una colección por cada combinación única de claves.', HAVING: 'Evalúa agregados de cada grupo y descarta los que no cumplen.', SELECT: 'Calcula expresiones y proyecta únicamente las columnas pedidas.', DISTINCT: 'Elimina filas duplicadas del resultado ya proyectado.', 'ORDER BY': 'Compara valores y reordena el conjunto ya proyectado.', VALUES: 'Relaciona cada valor con su columna por posición.', SET: 'Asigna los nuevos valores en las filas seleccionadas.' }[type] || 'El motor valida la instrucción y aplica la transformación sobre el estado temporal.');
-const exampleFor = (type) => ({ FROM: 'FROM Products', SOURCE: 'LEFT JOIN Orders o ON ...', JOIN: 'INNER JOIN Orders o ON c.id = o.customer_id', WHERE: 'WHERE price BETWEEN 10 AND 50', 'GROUP BY': 'GROUP BY category_id', HAVING: 'HAVING COUNT(*) >= 2', SELECT: 'SELECT name, AVG(price)', DISTINCT: 'SELECT DISTINCT city', 'ORDER BY': 'ORDER BY price DESC', LIMIT: 'OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY', VALUES: "VALUES (4, 'Books')", SET: 'SET stock = 10', INSERT: 'INSERT INTO Categories (...)', UPDATE: 'UPDATE Products SET ...', DELETE: 'DELETE FROM Orders WHERE ...', PARSE: 'CREATE TABLE Suppliers (...)' }[type] || `${type} ...`);
-const noteFor = (type) => type === 'LIMIT' ? 'SQL Server usa TOP o OFFSET ... FETCH en lugar de LIMIT.' : type === 'WHERE' ? 'WHERE no filtra agregados; para eso se usa HAVING.' : type === 'SELECT' ? 'Aunque se escribe primero, SELECT se resuelve después de FROM, WHERE y GROUP BY.' : type === 'DISTINCT' ? 'DISTINCT se aplica despues de construir la lista SELECT y antes del ordenamiento final.' : 'La simulación sigue el orden lógico, que puede diferir del orden escrito.';
+function HistoryModal({ open, history, onClose, onSelect }) {
+  if (!open) return null;
+  return <div className="history-modal-layer" role="dialog" aria-modal="true" aria-label="Historial de consultas">
+    <div className="table-detail-modal history-modal">
+      <button className="detail-close-btn" onClick={onClose} aria-label="Cerrar historial"><Icon name="close" /></button>
+      <div className="detail-header">
+        <div><span className="eyebrow">HISTORIAL</span><h2><Icon name="history" /> Consultas recientes</h2></div>
+        <span className="result-badge">{history.length} {history.length === 1 ? 'consulta' : 'consultas'}</span>
+      </div>
+      <div className="history-list modal-history-list">{history.length ? history.map((item, i) => <button key={`${item.time}-${i}`} onClick={() => { onSelect(item.sql); onClose(); }}><code>{item.sql.replace(/\s+/g, ' ').slice(0, 120)}</code><span>{item.time}</span></button>) : <p className="muted">Todavía no ejecutaste consultas.</p>}</div>
+    </div>
+  </div>;
+}
+
+const explanationFor = (type) => ({ FROM: 'El motor localiza la fuente y crea el conjunto inicial.', JOIN: 'Compara la condición ON fila por fila y combina coincidencias.', WHERE: 'Evalúa la condición externa para cada fila; si depende de una subconsulta, su resultado se obtiene en el paso siguiente.', [SUBQUERY_STEP_TYPE]: 'Ejecuta la consulta interna y devuelve un valor, conjunto o veredicto que la cláusula externa usa para decidir qué filas continúan.', 'GROUP BY': 'Construye una colección por cada combinación única de claves.', HAVING: 'Evalúa agregados de cada grupo y descarta los que no cumplen.', SELECT: 'Calcula expresiones y proyecta únicamente las columnas pedidas.', DISTINCT: 'Elimina filas duplicadas del resultado ya proyectado.', 'ORDER BY': 'Compara valores y reordena el conjunto ya proyectado.', UNION: 'Combina dos resultados union-compatible y elimina duplicados.', INTERSECT: 'Conserva solo las filas que aparecen en ambos resultados.', EXCEPT: 'Conserva filas de la primera consulta que no aparecen en la segunda.', VALUES: 'Relaciona cada valor con su columna por posición.', SET: 'Asigna los nuevos valores en las filas seleccionadas.' }[type] || 'El motor valida la instrucción y aplica la transformación sobre el estado temporal.');
+const exampleFor = (type) => ({ FROM: 'FROM Products', SOURCE: 'LEFT JOIN Orders o ON ...', JOIN: 'INNER JOIN Orders o ON c.id = o.customer_id', WHERE: 'WHERE YEAR(order_date) = 2026', [SUBQUERY_STEP_TYPE]: 'SELECT ... FROM ... WHERE columna = valor_externo', 'GROUP BY': 'GROUP BY category_id', HAVING: 'HAVING COUNT(*) >= 2', SELECT: 'SELECT name, AVG(price)', DISTINCT: 'SELECT DISTINCT city', 'ORDER BY': 'ORDER BY price DESC', UNION: 'SELECT city FROM Customers UNION SELECT city FROM Stores', INTERSECT: 'SELECT Dni FROM Empleados INTERSECT SELECT Dni FROM Jefes', EXCEPT: 'SELECT Dni FROM Empleados EXCEPT SELECT Dni FROM Jefes', LIMIT: 'OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY', VALUES: "VALUES (4, 'Books')", SET: 'SET stock = stock + 1', INSERT: 'INSERT INTO Categories (...)', UPDATE: 'UPDATE Products SET ...', DELETE: 'DELETE FROM Orders WHERE ...', PARSE: 'CREATE TABLE Suppliers (...)' }[type] || `${type} ...`);
+const stepModeGuide = (step) => ({ FROM: 'Este paso muestra la tabla o conjunto inicial antes de aplicar filtros. Si faltan filas acá, el problema suele estar en el nombre de la tabla o en el origen elegido.', SOURCE: 'Este paso prepara la fuente de datos declarada en la sentencia. Revisá que la tabla exista y que sus columnas coincidan con las que vas a usar después.', JOIN: 'Este paso combina tablas. Si aparecen NULL o faltan filas, revisá la condición ON y que estés comparando las claves correctas.', WHERE: 'Este paso decide fila por fila qué registros continúan. Las filas marcadas como recortadas no cumplen la condición, por eso ya no llegan a SELECT, GROUP BY u ORDER BY.', 'GROUP BY': 'Este paso junta filas que comparten el mismo valor de agrupación. Si el resultado tiene menos filas que antes, no es un error: ahora cada fila representa un grupo.', HAVING: 'Este paso filtra grupos ya calculados. A diferencia de WHERE, acá sí se pueden usar agregados como COUNT, SUM o AVG.', SELECT: 'Este paso arma las columnas finales. Si una columna desaparece, es porque no fue seleccionada o quedó reemplazada por una expresión o alias.', DISTINCT: 'Este paso elimina filas repetidas después de resolver SELECT. Si baja la cantidad de filas, significa que había resultados idénticos.', 'ORDER BY': 'Este paso solo reordena el resultado. No debería cambiar la cantidad de filas; si cambia, el problema viene de una etapa anterior.', VALUES: 'Este paso toma los valores escritos y los ubica por posición en las columnas del INSERT.', SET: 'Este paso calcula los nuevos valores del UPDATE para las filas que pasaron el WHERE.', INSERT: 'Este paso inserta registros en la tabla destino respetando columnas, tipos y restricciones.', UPDATE: 'Este paso modifica únicamente las filas alcanzadas por el WHERE. Si se actualizan demasiadas, revisá el filtro.', DELETE: 'Este paso elimina únicamente las filas alcanzadas por el WHERE. Si se eliminan demasiadas, el filtro es demasiado amplio.' }[step.type] || 'En este paso el motor valida o transforma la sentencia. Compará las filas visibles con lo que esperabas obtener en esta etapa.');
+const stepDebugHint = (step) => ['UNION', 'INTERSECT', 'EXCEPT'].includes(step.type) ? 'Si este resultado no coincide con lo esperado, revisá primero que ambos SELECT devuelvan la misma cantidad de columnas y tipos compatibles en el mismo orden.' : step.compare?.subquerySteps?.length ? 'La subconsulta se ejecuta como un recorrido interno: primero se obtiene su resultado y luego ese valor o conjunto se usa para evaluar la condición externa.' : step.compare?.kind === 'filter' ? 'Usá las filas recortadas como pista: compará sus valores con la condición escrita para entender por qué quedaron afuera.' : step.compare?.kind === 'project' ? 'Las columnas recortadas no se perdieron por error: SELECT define qué columnas quedan visibles en la salida.' : step.compare?.kind === 'join' ? 'Las columnas agregadas vienen de la tabla unida; el punto de unión ayuda a verificar si la relación FK = PK fue correcta.' : 'Si este paso no coincide con lo esperado, avanzá o retrocedé una etapa para ubicar exactamente dónde cambió el conjunto de datos.';
+const noteFor = (type) => type === 'LIMIT' ? 'SQL Server usa TOP o OFFSET ... FETCH en lugar de LIMIT.' : ['UNION', 'INTERSECT', 'EXCEPT'].includes(type) ? 'Los operadores de conjuntos se aplican despues de resolver cada SELECT individual.' : type === 'WHERE' ? 'WHERE no filtra agregados; para eso se usa HAVING.' : type === 'SELECT' ? 'Aunque se escribe primero, SELECT se resuelve después de FROM, WHERE y GROUP BY.' : type === 'DISTINCT' ? 'DISTINCT se aplica despues de construir la lista SELECT y antes del ordenamiento final.' : 'La simulación sigue el orden lógico, que puede diferir del orden escrito.';
+
+const guideForStep = (step) => step.type === SUBQUERY_STEP_TYPE ? 'Este paso abre la consulta interna. Si es correlacionada, revisá cada iteración: la fila externa inyecta un valor y la subconsulta devuelve un resultado para esa fila.' : stepModeGuide(step);
+const debugHintForStep = (step) => step.type === SUBQUERY_STEP_TYPE ? 'El resultado de este paso no es la salida final: vuelve a la condición externa para decidir si cada fila continúa.' : step.compare?.subquerySteps?.length ? 'La condición depende del resultado de una subconsulta; avanzá al paso siguiente para ver cómo se obtiene.' : stepDebugHint(step);
+const noteForStep = (type) => type === SUBQUERY_STEP_TYPE ? 'Las subconsultas de esta cátedra se evalúan desde WHERE o HAVING; su resultado alimenta la condición principal.' : noteFor(type);
 
 function Library({ open, onClose }) {
   const [search, setSearch] = useState('');
@@ -342,8 +638,9 @@ export default function App() {
   const [error, setError] = useState('');
   const [importMessage, setImportMessage] = useState('');
   const [history, setHistory] = useState([]);
-  const [tab, setTab] = useState('explain');
   const [schemaOpen, setSchemaOpen] = useState(false);
+  const [explainOpen, setExplainOpen] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const timer = useRef();
@@ -352,11 +649,14 @@ export default function App() {
   useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); setImportMessage(''); } }, [selectedExample]);
   useEffect(() => { databaseRef.current = database; }, [database]);
   useEffect(() => () => clearInterval(timer.current), []);
+  const visualSteps = useMemo(() => buildVisualSteps(execution), [execution]);
+  useEffect(() => { if (activeStep >= visualSteps.length) setActiveStep(Math.max(visualSteps.length - 1, 0)); }, [activeStep, visualSteps.length]);
   const run = (startStep = false) => {
     clearInterval(timer.current);
     try {
       if (!hasTerminatingSemicolon(sql)) throw new Error('La sentencia SQL debe finalizar con punto y coma (;).');
-      const next = executeSql(sql, databaseRef.current); databaseRef.current = next.db; setExecution(next); setDatabase(next.db); setError(''); setImportMessage(''); setActiveStep(0); setShowAll(!startStep); setStepMode(startStep); setTab('explain');
+      const statements = splitSqlStatements(sql);
+      const next = statements.length > 1 ? executeSqlScript(sql, databaseRef.current) : executeSql(sql, databaseRef.current); databaseRef.current = next.db; setExecution(next); setDatabase(next.db); setError(''); setImportMessage(''); setActiveStep(0); setShowAll(!startStep); setStepMode(startStep);
       setHistory((items) => [{ sql, time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) }, ...items.filter((x) => x.sql !== sql)].slice(0, 8));
     } catch (err) { setError(err.message); setImportMessage(''); setExecution(null); }
   };
@@ -370,20 +670,35 @@ export default function App() {
     try {
       if (!hasTerminatingSemicolon(content)) throw new Error('El archivo SQL debe finalizar cada sentencia con punto y coma (;).');
       const next = executeSqlScript(content, databaseRef.current);
-      databaseRef.current = next.db; setDatabase(next.db); setExecution(null); setError(''); setActiveStep(0); setShowAll(true); setTab('explain');
+      databaseRef.current = next.db; setDatabase(next.db); setExecution(null); setError(''); setActiveStep(0); setShowAll(true);
       setImportMessage(`${fileName}: ${next.importedStatements} sentencias ejecutadas sobre la base local.`);
     } catch (err) { setError(err.message); setImportMessage(''); }
   };
   const reset = () => { clearInterval(timer.current); const initial = createSeedDatabase(); databaseRef.current = initial; setDatabase(initial); setExecution(null); setError(''); setImportMessage(''); setActiveStep(0); setHistory([]); setSelectedExample(''); setSql(''); };
-  const activeResult = useMemo(() => execution?.steps[activeStep]?.rows || [], [execution, activeStep]);
+  const activeVisualStep = visualSteps[Math.min(activeStep, Math.max(visualSteps.length - 1, 0))]?.item;
+  const activeResult = useMemo(() => activeVisualStep?.rows || [], [activeVisualStep]);
+  const activeClause = activeVisualStep?.parentType || activeVisualStep?.type || '';
+  const overlayOpen = schemaOpen || libraryOpen || historyOpen;
+  useEffect(() => {
+    document.body.classList.toggle('overlay-locked', overlayOpen);
+    return () => document.body.classList.remove('overlay-locked');
+  }, [overlayOpen]);
+  const closeOverlayWindows = () => { setSchemaOpen(false); setLibraryOpen(false); setHistoryOpen(false); };
+  const openOverlayWindow = (name) => {
+    setSchemaOpen(name === 'schema');
+    setLibraryOpen(name === 'library');
+    setHistoryOpen(name === 'history');
+  };
 
   return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
-    <header className="topbar"><a className="brand" href="#top"><span className="brand-mark"><Icon name="database" /></span><span>SQL <strong>Journey</strong><small>Visual query explorer</small></span></a><nav><button className="mobile-only-flex" onClick={() => setSchemaOpen(true)}><Icon name="database" /> Datos</button><button onClick={() => setLibraryOpen(true)}><Icon name="book" /> Biblioteca SQL</button></nav><div className="header-actions"><button className="theme-toggle" onClick={() => setDarkMode((value) => !value)} aria-label={darkMode ? 'Activar modo claro' : 'Activar modo oscuro'} title={darkMode ? 'Modo claro' : 'Modo oscuro'}><Icon name={darkMode ? 'sun' : 'moon'} /></button><div className="session-pill"><span /> Sesión temporal</div></div></header>
-    <main id="top"><SchemaPanel database={database} setDatabase={setDatabase} open={schemaOpen} onClose={() => setSchemaOpen(false)} /><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, selectedExample, setSelectedExample, error, importMessage }} activeClause={execution?.steps[activeStep]?.type || ''} onImportSqlFile={importSqlFile} onRun={() => run(false)} onStep={toggleStepMode} onReset={reset} /><ResultPanel execution={execution} /></div><div className="content-grid"><Journey {...{ execution, activeStep, setActiveStep, showAll, stepMode, sql }} /><ExplainPanel {...{ execution, activeStep, tab, setTab, history }} onHistory={(value) => { setSql(value); setTab('explain'); }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div></main>
+    <header className="topbar"><a className="brand" href="#top"><span className="brand-mark"><Icon name="database" /></span><span>SQL <strong>Tutor</strong><small>Explorador Visual Consultas</small></span></a><nav><button className="nav-icon-button" onClick={() => openOverlayWindow('schema')} aria-label="Abrir base de datos" title="Base de datos"><Icon name="database" /></button><button className={`nav-icon-button ${explainOpen ? 'active' : ''}`} onClick={() => setExplainOpen((value) => !value)} aria-label={explainOpen ? 'Cerrar explicación' : 'Abrir explicación'} aria-pressed={explainOpen} title="Explicación"><Icon name="bulb" /></button><button onClick={() => openOverlayWindow('library')}><Icon name="book" /> Biblioteca SQL</button></nav><div className="header-actions"><button className="theme-toggle" onClick={() => setDarkMode((value) => !value)} aria-label={darkMode ? 'Activar modo claro' : 'Activar modo oscuro'} title={darkMode ? 'Modo claro' : 'Modo oscuro'}><Icon name={darkMode ? 'sun' : 'moon'} /></button><button className="theme-toggle header-history-button" onClick={() => openOverlayWindow('history')} aria-label="Abrir historial" title="Historial"><Icon name="history" /></button><div className="session-pill"><span /> Sesión temporal</div></div></header>
+    <main id="top"><SchemaPanel database={database} setDatabase={setDatabase} open={schemaOpen} onClose={() => setSchemaOpen(false)} /><div className={`workspace-layout ${explainOpen ? 'explain-open' : ''}`}><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, setError, setImportMessage, selectedExample, setSelectedExample, error, importMessage, stepMode }} activeClause={activeClause} onImportSqlFile={importSqlFile} onRun={() => run(false)} onStep={toggleStepMode} onReset={reset} /><ResultPanel execution={execution} /></div><div className="content-grid"><Journey {...{ execution, visualSteps, activeStep, setActiveStep, showAll, setShowAll, stepMode, setStepMode, sql }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div><ExplainPanel {...{ visualSteps, activeStep, stepMode }} open={explainOpen} onClose={() => setExplainOpen(false)} /></div></main>
     <footer className="app-footer">
       <div className="footer-main"><span>Página realizada por <strong>Prieto Agustin</strong></span><span>Alumno UTNFRC</span><span className="footer-badge">Fase de Pruebas</span></div>
       <p className="footer-legal">Copyright © 2026 Prieto Agustin. Todos los derechos reservados. Uso educativo autorizado. Prohibida la copia, redistribución o explotación comercial sin permiso.</p>
     </footer>
-    <Library open={libraryOpen} onClose={() => setLibraryOpen(false)} />{(schemaOpen || libraryOpen) && <button className={`scrim ${schemaOpen && !libraryOpen ? 'mobile-only-scrim' : ''}`} onClick={() => { setSchemaOpen(false); setLibraryOpen(false); }} aria-label="Cerrar panel" />}
+    {overlayOpen && <button className="scrim" onClick={closeOverlayWindows} aria-label="Cerrar ventana" />}
+    <Library open={libraryOpen} onClose={() => setLibraryOpen(false)} />
+    <HistoryModal open={historyOpen} history={history} onClose={() => setHistoryOpen(false)} onSelect={(value) => setSql(value)} />
   </div>;
 }

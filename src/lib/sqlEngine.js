@@ -78,12 +78,54 @@ const compareSqlValues = (left, right) => {
   if (a === b) return 0;
   return a < b ? -1 : 1;
 };
+const padDatePart = (value) => String(value).padStart(2, '0');
+const formatSqlDate = (date) => `${date.getUTCFullYear()}-${padDatePart(date.getUTCMonth() + 1)}-${padDatePart(date.getUTCDate())}`;
+const formatSqlDateTime = (date) => `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())} ${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}:${padDatePart(date.getSeconds())}`;
+const baseTypeName = (type) => type.trim().match(/^[A-Za-z]+/)?.[0]?.toUpperCase() || '';
+const convertSqlValue = (value, type) => {
+  if (value == null) return null;
+  const base = baseTypeName(type);
+  if (['CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR', 'TEXT'].includes(base)) return String(value);
+  if (['INT', 'INTEGER', 'BIGINT', 'SMALLINT', 'TINYINT'].includes(base)) {
+    const number = Number(value);
+    if (Number.isNaN(number)) throw new Error(`No se pudo convertir "${value}" a ${base}.`);
+    return Math.trunc(number);
+  }
+  if (['DECIMAL', 'NUMERIC', 'FLOAT', 'REAL', 'DOUBLE', 'MONEY'].includes(base)) {
+    const number = Number(value);
+    if (Number.isNaN(number)) throw new Error(`No se pudo convertir "${value}" a ${base}.`);
+    return number;
+  }
+  if (base === 'DATE') {
+    const timestamp = parseSqlDate(value);
+    if (timestamp == null) throw new Error(`No se pudo convertir "${value}" a DATE.`);
+    return formatSqlDate(new Date(timestamp));
+  }
+  if (['DATETIME', 'TIMESTAMP'].includes(base)) {
+    const timestamp = parseSqlDate(value);
+    if (timestamp == null) throw new Error(`No se pudo convertir "${value}" a ${base}.`);
+    return `${formatSqlDate(new Date(timestamp))} 00:00:00`;
+  }
+  if (['BIT', 'BOOLEAN'].includes(base)) return Boolean(value);
+  return value;
+};
+const likePatternToRegex = (pattern) => {
+  let source = '^';
+  for (const char of String(pattern)) {
+    if (char === '%') source += '.*';
+    else if (char === '_') source += '.';
+    else source += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`${source}$`);
+};
 const stripAlias = (key) => key.includes('.') ? key.split('.').pop() : key;
 const normalizeIdentifier = (value) => value.trim().replace(/[\[\]"`]/g, '');
 const isLiteral = (value) => /^'.*'$/.test(value) || /^null$/i.test(value) || /^(true|false)$/i.test(value) || !Number.isNaN(Number(value));
 const valueOf = (row, token) => {
   const key = normalizeIdentifier(token);
   if (isLiteral(key)) return unquote(key);
+  const scalar = scalarValue(row, key);
+  if (scalar.handled) return scalar.value;
   const keys = Object.keys(row).filter((item) => !item.startsWith('__'));
   const qualified = key.match(/^([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/);
   if (qualified) {
@@ -96,7 +138,7 @@ const valueOf = (row, token) => {
   }
   const sourceMatches = keys.filter((k) => k.includes('.') && stripAlias(k).toLowerCase() === key.toLowerCase());
   const sourceAliases = [...new Set(sourceMatches.map((k) => k.split('.')[0].toLowerCase()))];
-  if (sourceAliases.length > 1) throw new Error(`Nombre de columna ambiguo "${key}".`);
+  if (sourceAliases.length > 1) throw new Error(`Referencia de columna ambigua "${key}" (nombre ambiguo).`);
   if (sourceMatches.length === 1) return row[sourceMatches[0]];
   const found = keys.find((k) => k.toLowerCase() === key.toLowerCase());
   if (found) return row[found];
@@ -120,31 +162,52 @@ const findTable = (db, name) => Object.keys(db).find((key) => key.toLowerCase() 
 const tableColumns = (rows) => rows.columns || Object.keys(rows[0] || {});
 const tableColumnTypes = (rows) => rows.columnTypes || {};
 const tableConstraints = (rows) => rows.constraints || [];
-const columnName = (rows, name) => tableColumns(rows).find((key) => key.toLowerCase() === name.toLowerCase());
+const columnName = (rows, name) => {
+  const normalized = normalizeIdentifier(name).toLowerCase();
+  return tableColumns(rows).find((key) => key.toLowerCase() === normalized);
+};
 const requireColumn = (rows, table, name) => {
   const found = columnName(rows, name);
   if (!found) throw new Error(`La columna "${name}" no existe en la tabla "${table}".`);
   return found;
 };
+const columnList = (text) => splitComma(text).map((column) => normalizeIdentifier(column));
+const supportedColumnTypes = new Set(['INT', 'INTEGER', 'BIGINT', 'SMALLINT', 'TINYINT', 'DECIMAL', 'NUMERIC', 'FLOAT', 'REAL', 'DOUBLE', 'MONEY', 'CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR', 'TEXT', 'DATE', 'DATETIME', 'TIMESTAMP', 'BIT', 'BOOLEAN']);
+const validateColumnType = (type) => {
+  const base = type.match(/^[A-Za-z]+/)?.[0]?.toUpperCase();
+  if (!supportedColumnTypes.has(base)) throw new Error(`Error de sintaxis: tipo de dato "${base || type}" no reconocido.`);
+};
+const ddlSyntaxError = (definition, near = definition) => { throw new Error(`Error de sintaxis en CREATE TABLE cerca de "${near.trim()}". La definicion no coincide con una columna o restriccion SQL valida.`); };
 const constraintDefinition = (definition) => {
   const normalized = definition.trim().replace(/^CONSTRAINT\s+\w+\s+/i, '');
-  let match = normalized.match(/^FOREIGN\s+KEY\s*\(([^)]+)\)\s+REFERENCES\s+(\w+)\s*\(([^)]+)\)/i);
-  if (match) return { type: 'FOREIGN KEY', columns: splitComma(match[1]), references: { table: match[2], columns: splitComma(match[3]) } };
-  match = normalized.match(/^PRIMARY\s+KEY\s*\(([^)]+)\)/i);
-  if (match) return { type: 'PRIMARY KEY', columns: splitComma(match[1]) };
-  match = normalized.match(/^UNIQUE\s*\(([^)]+)\)/i);
-  if (match) return { type: 'UNIQUE', columns: splitComma(match[1]) };
-  if (/^CHECK\s*\(/i.test(normalized)) return { type: 'CHECK', expression: normalized };
+  let match = normalized.match(/^FOREIGN\s+KEY\s*\(([^)]+)\)\s+REFERENCES\s+(\w+)\s*\(([^)]+)\)$/i);
+  if (match) return { type: 'FOREIGN KEY', columns: columnList(match[1]), references: { table: match[2], columns: columnList(match[3]) } };
+  match = normalized.match(/^PRIMARY\s+KEY\s*\(([^)]+)\)$/i);
+  if (match) return { type: 'PRIMARY KEY', columns: columnList(match[1]) };
+  match = normalized.match(/^UNIQUE\s*\(([^)]+)\)$/i);
+  if (match) return { type: 'UNIQUE', columns: columnList(match[1]) };
+  if (/^CHECK\s*\([\s\S]*\)$/i.test(normalized)) return { type: 'CHECK', expression: normalized };
+  if (/^(CONSTRAINT|FOREIGN|PRIMARY|UNIQUE|CHECK)\b/i.test(definition.trim())) ddlSyntaxError(definition);
   return null;
 };
 const columnDefinition = (definition) => {
   if (constraintDefinition(definition)) return null;
-  const match = definition.trim().match(/^(\w+)\s+([A-Za-z]+(?:\s*\([^)]*\))?)/);
-  if (!match) return null;
+  const match = definition.trim().match(/^(\w+)\s+([A-Za-z]+(?:\s*\([^)]*\))?)([\s\S]*)$/);
+  if (!match) ddlSyntaxError(definition);
+  validateColumnType(match[2]);
   const constraints = [];
-  const inlineReference = definition.match(/\bREFERENCES\s+(\w+)\s*\(([^)]+)\)/i);
-  if (inlineReference) constraints.push({ type: 'FOREIGN KEY', columns: [match[1]], references: { table: inlineReference[1], columns: splitComma(inlineReference[2]) } });
-  if (/\bPRIMARY\s+KEY\b/i.test(definition)) constraints.push({ type: 'PRIMARY KEY', columns: [match[1]] });
+  let rest = match[3].trim();
+  while (rest) {
+    let token;
+    if ((token = rest.match(/^NOT\s+NULL\b/i))) { constraints.push({ type: 'NOT NULL', columns: [match[1]] }); rest = rest.slice(token[0].length).trim(); }
+    else if ((token = rest.match(/^NULL\b/i))) rest = rest.slice(token[0].length).trim();
+    else if ((token = rest.match(/^PRIMARY\s+KEY\b/i))) { constraints.push({ type: 'PRIMARY KEY', columns: [match[1]] }); rest = rest.slice(token[0].length).trim(); }
+    else if ((token = rest.match(/^UNIQUE\b/i))) { constraints.push({ type: 'UNIQUE', columns: [match[1]] }); rest = rest.slice(token[0].length).trim(); }
+    else if ((token = rest.match(/^REFERENCES\s+(\w+)\s*\(([^)]+)\)/i))) { constraints.push({ type: 'FOREIGN KEY', columns: [match[1]], references: { table: token[1], columns: columnList(token[2]) } }); rest = rest.slice(token[0].length).trim(); }
+    else if ((token = rest.match(/^DEFAULT\s+(?:'[^']*(?:''[^']*)*'|\([^)]*\)|[^\s]+)/i))) rest = rest.slice(token[0].length).trim();
+    else if ((token = rest.match(/^CHECK\s*\([\s\S]*\)$/i))) rest = rest.slice(token[0].length).trim();
+    else ddlSyntaxError(definition, rest);
+  }
   return { name: match[1], type: match[2].replace(/\s+/g, '').toUpperCase(), constraint: constraints };
 };
 const rememberColumns = (rows, columns, columnTypes = {}, constraints = []) => { rows.columns = columns; rows.columnTypes = columnTypes; rows.constraints = constraints; return rows; };
@@ -173,7 +236,8 @@ const primaryKeyError = (table, columns, values) => {
   return new Error(`Infraccion de la restriccion PRIMARY KEY '${constraintName}'. No se puede insertar una clave duplicada en el objeto 'dbo.${table.toUpperCase()}'. El valor de la clave duplicada es (${values.join(', ')}).`);
 };
 
-const primaryKeyNullError = (table, column) => new Error(`No se permite insertar un valor NULL en la columna '${column}', tabla 'dbo.${table.toUpperCase()}'. La instruccion termino.`);
+const primaryKeyNullError = (table, column) => new Error(`La PK no puede asumir valor nulo. No se permite insertar un valor NULL en la columna '${column}', tabla 'dbo.${table.toUpperCase()}'. La instruccion termino.`);
+const notNullError = (table, column) => new Error(`La columna '${column}' tiene restriccion NOT NULL y no puede asumir valor nulo en la tabla 'dbo.${table.toUpperCase()}'.`);
 
 const foreignKeyError = (table, refTable, columns) => {
   const constraintName = generatedConstraintName('FK', table, columns, refTable);
@@ -182,10 +246,12 @@ const foreignKeyError = (table, refTable, columns) => {
 
 const sameColumns = (left, right) => left.length === right.length && left.every((column, index) => column.toLowerCase() === right[index].toLowerCase());
 
-function referencedKeyExists(db, refTable, refColumns) {
+function referencedKeyConstraint(db, refTable, refColumns) {
   const constraints = tableConstraints(db[refTable]);
-  return constraints.some((constraint) => ['PRIMARY KEY', 'UNIQUE'].includes(constraint.type) && sameColumns(constraint.columns, refColumns));
+  return constraints.find((constraint) => ['PRIMARY KEY', 'UNIQUE'].includes(constraint.type) && sameColumns(constraint.columns, refColumns));
 }
+
+const normalizedColumnType = (rows, column) => tableColumnTypes(rows)[column]?.replace(/\s+/g, '').toUpperCase() || 'UNKNOWN';
 
 function validateConstraintDefinitions(db, table) {
   const rows = db[table];
@@ -195,7 +261,16 @@ function validateConstraintDefinitions(db, table) {
       const refTable = findTable(db, constraint.references.table);
       if (!refTable) throw new Error(`La tabla referenciada "${constraint.references.table}" no existe.`);
       constraint.references.columns.forEach((column) => requireColumn(db[refTable], refTable, column));
-      if (!referencedKeyExists(db, refTable, constraint.references.columns)) throw new Error(`La clave foranea en "${table}" debe referenciar una PRIMARY KEY o UNIQUE existente.`);
+      if (constraint.columns.length !== constraint.references.columns.length) throw new Error(`La clave foranea en "${table}" debe tener la misma cantidad de columnas que la clave referenciada.`);
+      const referenced = referencedKeyConstraint(db, refTable, constraint.references.columns);
+      if (!referenced) throw new Error(`La clave foranea en "${table}" debe referenciar una PRIMARY KEY o UNIQUE existente con la misma cantidad y orden de columnas.`);
+      constraint.columns.forEach((column, index) => {
+        const localColumn = requireColumn(rows, table, column);
+        const refColumn = requireColumn(db[refTable], refTable, constraint.references.columns[index]);
+        const localType = normalizedColumnType(rows, localColumn);
+        const refType = normalizedColumnType(db[refTable], refColumn);
+        if (localType !== refType) throw new Error(`La clave foranea en "${table}" no coincide en tipos: ${localColumn} es ${localType} pero ${refTable}.${refColumn} es ${refType}.`);
+      });
     }
   }
 }
@@ -212,6 +287,13 @@ function validateTableIntegrity(db, table) {
       const signature = JSON.stringify(values);
       if (seen.has(signature)) throw primaryKeyError(table, pk.columns, values);
       seen.set(signature, true);
+    }
+  }
+  for (const nn of tableConstraints(rows).filter((constraint) => constraint.type === 'NOT NULL')) {
+    for (const row of rows) {
+      for (const column of nn.columns) {
+        if (columnValue(row, column) === null || columnValue(row, column) === undefined) throw notNullError(table, column);
+      }
     }
   }
   for (const fk of tableConstraints(rows).filter((constraint) => constraint.type === 'FOREIGN KEY')) {
@@ -311,44 +393,157 @@ function findOutermostSubquery(expr) {
   return null;
 }
 
-function resolveSubqueries(expr, db, stepsCollector) {
+function hasTopLevelSelectKeyword(expr) {
+  let depth = 0; let quoted = false;
+  const upper = expr.toUpperCase();
+  for (let i = 0; i < upper.length; i += 1) {
+    if (upper[i] === "'" && upper[i + 1] === "'") { i += 1; continue; }
+    if (upper[i] === "'") { quoted = !quoted; continue; }
+    if (quoted) continue;
+    if (upper[i] === '(') { depth += 1; continue; }
+    if (upper[i] === ')') { depth -= 1; continue; }
+    if (depth === 0 && keywordAt(upper, i, 'SELECT')) return true;
+  }
+  return false;
+}
+
+function hasOuterReference(sql, outerRow = {}) {
+  const aliases = new Set(Object.keys(outerRow).filter((key) => key.includes('.')).map((key) => key.split('.')[0]));
+  if (!aliases.size) return false;
+  return [...aliases].some((alias) => new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\.`, 'i').test(sql));
+}
+
+function externalReferences(sql, outerRow = {}) {
+  return Object.keys(outerRow)
+    .filter((key) => key.includes('.') && new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(sql))
+    .map((key) => ({ name: key, value: outerRow[key] }));
+}
+
+function subqueryOperatorFromPrefix(prefix) {
+  if (/(?:^|\s)(NOT\s+)?EXISTS\s*$/i.test(prefix)) return /NOT\s+EXISTS\s*$/i.test(prefix) ? 'NOT EXISTS' : 'EXISTS';
+  const quantified = prefix.match(/(?:^|\s)(>=|<=|<>|!=|=|>|<)\s+(ALL|ANY|SOME)\s*$/i);
+  if (quantified) return `${quantified[1]} ${quantified[2].toUpperCase()}`;
+  if (/(?:^|\s)(NOT\s+)?IN\s*$/i.test(prefix)) return /NOT\s+IN\s*$/i.test(prefix) ? 'NOT IN' : 'IN';
+  const comparison = prefix.match(/(?:^|\s)(>=|<=|<>|!=|=|>|<)\s*$/i);
+  return comparison ? comparison[1] : 'ESCALAR';
+}
+
+function subqueryInnerCondition(innerSql) {
+  const whereText = clause(innerSql, 'WHERE', ['GROUP BY', 'HAVING', 'ORDER BY', 'OFFSET', 'LIMIT']);
+  if (whereText) return `WHERE ${whereText}`;
+  const havingText = clause(innerSql, 'HAVING', ['ORDER BY', 'OFFSET', 'LIMIT']);
+  return havingText ? `HAVING ${havingText}` : '';
+}
+
+function conditionIdentifiers(condition = '') {
+  const withoutStrings = condition.replace(/'[^']*(?:''[^']*)*'/g, ' ');
+  return [...new Set((withoutStrings.match(/\b[A-Za-z_]\w*\.[A-Za-z_]\w*\b/g) || []).map((item) => item.toLowerCase()))];
+}
+
+function lookupConditionValue(name, parameters, row = {}) {
+  const parameter = parameters.find((item) => item.name.toLowerCase() === name.toLowerCase());
+  if (parameter) return { found: true, value: parameter.value };
+  const exact = Object.keys(row).find((key) => key.toLowerCase() === name.toLowerCase());
+  if (exact) return { found: true, value: row[exact] };
+  const column = stripAlias(name).toLowerCase();
+  const unqualified = Object.keys(row).find((key) => key.toLowerCase() === column);
+  if (unqualified) return { found: true, value: row[unqualified] };
+  return { found: false };
+}
+
+function conditionReferenceValues(condition, parameters, execution) {
+  const sampleRow = execution.steps.find((item) => item.type === 'WHERE' && item.rows.length)?.rows[0]
+    || execution.steps.find((item) => item.type === 'FROM' && item.rows.length)?.rows[0]
+    || execution.result[0]
+    || {};
+  return conditionIdentifiers(condition).map((name) => {
+    const match = lookupConditionValue(name, parameters, sampleRow);
+    return match.found ? { name, value: match.value } : null;
+  }).filter(Boolean);
+}
+
+function annotateSubqueryVerdict(stepsCollector, fromIndex, evaluatedCondition, verdict) {
+  if (!stepsCollector?.subqueryResults) return;
+  stepsCollector.subqueryResults.slice(fromIndex).forEach((summary) => {
+    if (summary.mode !== 'correlated') return;
+    summary.evaluatedCondition = evaluatedCondition;
+    summary.verdict = verdict === true ? 'TRUE' : verdict === false ? 'FALSE' : 'UNKNOWN';
+    summary.passesFilter = isSqlTrue(verdict);
+  });
+}
+
+function collectSubqueryTrace(stepsCollector, execution, innerSql, outerRow, values, columns, prefix) {
+  if (!stepsCollector) return;
+  const mode = hasOuterReference(innerSql, outerRow) ? 'correlated' : 'uncorrelated';
+  const traceId = (stepsCollector.subqueryTraceCounter || 0) + 1;
+  stepsCollector.subqueryTraceCounter = traceId;
+  const iteration = mode === 'correlated' ? (stepsCollector.subqueryIterationCounter || 0) + 1 : null;
+  if (iteration) stepsCollector.subqueryIterationCounter = iteration;
+  const parameters = externalReferences(innerSql, outerRow);
+  const innerCondition = subqueryInnerCondition(innerSql);
+  stepsCollector.push(...execution.steps.map(s => ({ ...s, isSubquery: true, subqueryMode: mode, subqueryTraceId: traceId, subqueryIteration: iteration, subqueryParameters: parameters })));
+  stepsCollector.subqueryResults = stepsCollector.subqueryResults || [];
+  stepsCollector.subqueryResults.push({
+    id: traceId,
+    mode,
+    iteration,
+    operator: subqueryOperatorFromPrefix(prefix),
+    parameters,
+    innerSql,
+    innerCondition,
+    conditionValues: conditionReferenceValues(innerCondition, parameters, execution),
+    columns,
+    rowCount: execution.result.length,
+    values: values.slice(0, 8)
+  });
+}
+
+function resolveSubqueries(expr, db, stepsCollector, outerRow = {}) {
   const sq = findOutermostSubquery(expr);
   if (!sq) return expr;
 
   const innerSql = expr.slice(sq.start + 1, sq.end).trim();
-  const execution = executeSql(innerSql, db);
-  const values = execution.result.map(row => Object.values(row)[0]);
-
-  if (stepsCollector) {
-    stepsCollector.push(...execution.steps.map(s => ({ ...s, isSubquery: true })));
+  if (/^(>=|<=|<>|!=|=|>|<)\s+/.test(expr.slice(sq.end + 1).trim())) throw new Error('La subconsulta debe aparecer a la derecha del operador.');
+  if (clause(innerSql, 'ORDER BY', ['OFFSET', 'LIMIT']) !== undefined) throw new Error('La subconsulta no puede contener la cláusula ORDER BY.');
+  if (splitSetOperations(innerSql)) throw new Error('No puede haber UNION de otros SELECT en una subconsulta.');
+  let execution;
+  try {
+    execution = executeSql(innerSql, db);
+  } catch (err) {
+    if (!Object.keys(outerRow).length) throw err;
+    execution = executeSql(innerSql, db, outerRow);
   }
+  const values = execution.result.map(row => Object.values(row)[0]);
+  const subqueryColumns = resultColumns(execution, innerSql);
 
   const prefix = expr.slice(0, sq.start);
+  collectSubqueryTrace(stepsCollector, execution, innerSql, outerRow, values, subqueryColumns, prefix);
 
-  const allMatch = prefix.match(/(?:^|\s)(>=|<=|<>|!=|=|>|<)\s+ALL\s*$/i);
-  if (allMatch) {
-    const op = allMatch[1];
-    const replaceFrom = prefix.length - allMatch[0].length;
-    let replaceWith;
-    if (values.length === 0) {
-      replaceWith = '1=1';
-    } else if (op === '=') {
-      const unique = [...new Set(values)];
-      replaceWith = unique.length === 1 ? ` ${op} ${sqlValue(unique[0])}` : '1=0';
-    } else if (op === '<>') {
-      replaceWith = ` NOT IN (${values.map(v => sqlValue(v)).join(',')})`;
-    } else if (op === '>=' || op === '>') {
-      const max = values.reduce((a, b) => a > b ? a : b);
-      replaceWith = ` ${op} ${sqlValue(max)}`;
-    } else {
-      const min = values.reduce((a, b) => a < b ? a : b);
-      replaceWith = ` ${op} ${sqlValue(min)}`;
-    }
-    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector);
+  const existsMatch = prefix.match(/(?:^|\s)(NOT\s+)?EXISTS\s*$/i);
+  if (existsMatch) {
+    if (!hasOuterReference(innerSql, outerRow)) throw new Error('EXISTS debe incluir una referencia externa (subconsulta correlacionada).');
+    const replaceFrom = prefix.length - existsMatch[0].length;
+    const exists = execution.result.length > 0;
+    const replaceWith = existsMatch[1] ? (exists ? '1=0' : '1=1') : (exists ? '1=1' : '1=0');
+    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector, outerRow);
+  }
+
+  const quantifiedMatch = prefix.match(/(?:^|\s)([\s\S]+?)\s*(>=|<=|<>|!=|=|>|<)\s+(ALL|ANY|SOME)\s*$/i);
+  if (quantifiedMatch) {
+    if (subqueryColumns.length !== 1) throw new Error('La subconsulta debe devolver una única columna para este operador.');
+    const left = quantifiedMatch[1].trim();
+    const op = quantifiedMatch[2];
+    const quantifier = quantifiedMatch[3].toUpperCase();
+    const replaceFrom = prefix.length - quantifiedMatch[0].length;
+    const replaceWith = values.length === 0
+      ? (quantifier === 'ALL' ? '1=1' : '1=0')
+      : values.map((value) => `${left} ${op} ${sqlValue(value)}`).join(quantifier === 'ALL' ? ' AND ' : ' OR ');
+    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector, outerRow);
   }
 
   const inMatch = prefix.match(/(?:^|\s)(NOT\s+)?IN\s*$/i);
   if (inMatch) {
+    if (subqueryColumns.length !== 1) throw new Error('La subconsulta debe devolver una única columna para este operador.');
     const not = inMatch[1] || '';
     const replaceFrom = prefix.length - inMatch[0].length;
     let replaceWith;
@@ -357,20 +552,32 @@ function resolveSubqueries(expr, db, stepsCollector) {
     } else {
       replaceWith = ` ${not}IN (${values.map(v => sqlValue(v)).join(',')})`;
     }
-    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector);
+    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector, outerRow);
   }
 
   const opMatch = prefix.match(/(?:^|\s)(>=|<=|<>|!=|=|>|<)\s*$/i);
   if (opMatch) {
+    if (subqueryColumns.length !== 1) throw new Error('La subconsulta debe devolver una única columna para este operador.');
+    if (values.length > 1) throw new Error('La subconsulta debe devolver una única fila para este operador.');
     const op = opMatch[1];
     const replaceFrom = prefix.length - opMatch[0].length;
     const scalar = values.length > 0 ? values[0] : null;
     const replaceWith = ` ${op} ${sqlValue(scalar)}`;
-    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector);
+    return resolveSubqueries(expr.slice(0, replaceFrom) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector, outerRow);
   }
 
   const replaceWith = ` ${sqlValue(values.length > 0 ? values[0] : null)}`;
-  return resolveSubqueries(expr.slice(0, sq.start) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector);
+  return resolveSubqueries(expr.slice(0, sq.start) + replaceWith + expr.slice(sq.end + 1), db, stepsCollector, outerRow);
+}
+
+function removeSubqueries(expr) {
+  let current = expr;
+  let sq = findOutermostSubquery(current);
+  while (sq) {
+    current = `${current.slice(0, sq.start)} ${current.slice(sq.end + 1)}`;
+    sq = findOutermostSubquery(current);
+  }
+  return current;
 }
 
 const sqlAnd = (left, right) => left === false || right === false ? false : left === null || right === null ? null : true;
@@ -394,13 +601,16 @@ function isWrappedExpression(expr) {
 
 function testCondition(row, raw, db) {
   let expr = raw.trim().replace(/\s+/g, ' ');
-  if (db) expr = resolveSubqueries(expr, db);
   while (isWrappedExpression(expr)) expr = expr.slice(1, -1).trim();
   const or = splitLogic(expr, 'OR');
-  if (or) return sqlOr(testCondition(row, or[0]), testCondition(row, or[1]));
+  if (or) return sqlOr(testCondition(row, or[0], db), testCondition(row, or[1], db));
   const and = splitLogic(expr, 'AND');
-  if (and) return sqlAnd(testCondition(row, and[0]), testCondition(row, and[1]));
-  if (/^NOT\s+/i.test(expr)) return sqlNot(testCondition(row, expr.replace(/^NOT\s+/i, '')));
+  if (and) return sqlAnd(testCondition(row, and[0], db), testCondition(row, and[1], db));
+  if (/^NOT\s+/i.test(expr)) return sqlNot(testCondition(row, expr.replace(/^NOT\s+/i, ''), db));
+  if (db && /(\(\s*SELECT\b|\bEXISTS\s*\()/i.test(expr)) {
+    const resolved = resolveSubqueries(expr, db, undefined, row).trim();
+    if (resolved !== expr) return testCondition(row, resolved);
+  }
 
   let match = expr.match(/^(.+?)\s+IS\s+(NOT\s+)?NULL$/i);
   if (match) return match[2] ? valueOf(row, match[1]) != null : valueOf(row, match[1]) == null;
@@ -421,8 +631,7 @@ function testCondition(row, raw, db) {
   if (match) {
     const left = valueOf(row, match[1]); const patternValue = valueOf(row, match[3]);
     if (left == null || patternValue == null) return null;
-    const pattern = String(patternValue).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.');
-    const has = new RegExp(`^${pattern}$`, 'i').test(String(left));
+    const has = likePatternToRegex(patternValue).test(String(left));
     return match[2] ? sqlNot(has) : has;
   }
   match = expr.match(/^(.+?)\s*(>=|<=|<>|!=|=|>|<)\s*(.+)$/);
@@ -445,6 +654,87 @@ function splitComma(text) {
   }
   if (current.trim()) result.push(current.trim());
   return result;
+}
+
+function topLevelArithmetic(expression, operators) {
+  let depth = 0; let quoted = false;
+  for (let i = expression.length - 1; i >= 0; i -= 1) {
+    const char = expression[i];
+    if (char === "'" && expression[i - 1] === "'") { i -= 1; continue; }
+    if (char === "'") { quoted = !quoted; continue; }
+    if (quoted) continue;
+    if (char === ')') { depth += 1; continue; }
+    if (char === '(') { depth -= 1; continue; }
+    if (depth !== 0 || !operators.includes(char)) continue;
+    const before = expression.slice(0, i).trim();
+    const after = expression.slice(i + 1).trim();
+    if (!before || !after || /[+\-*/(]$/.test(before)) continue;
+    return { left: before, operator: char, right: after };
+  }
+  return null;
+}
+
+function arithmeticExpression(expression) {
+  return topLevelArithmetic(expression, ['+', '-']) || topLevelArithmetic(expression, ['*', '/']);
+}
+
+function yearFromSqlValue(value) {
+  if (value == null) return null;
+  const timestamp = parseSqlDate(value);
+  if (timestamp == null) throw new Error(`YEAR esperaba un valor DATE o TIMESTAMP y recibio "${value}".`);
+  return new Date(timestamp).getUTCFullYear();
+}
+
+function scalarValue(row, expression) {
+  const expr = expression.trim();
+  if (/^GETDATE\s*\(\s*\)$/i.test(expr)) return { handled: true, value: formatSqlDateTime(new Date()) };
+  if (/^CURRENT_DATE(?:\(\))?$/i.test(expr)) return { handled: true, value: new Date().toISOString().slice(0, 10) };
+  if (/^CURRENT_TIMESTAMP(?:\(\))?$/i.test(expr)) return { handled: true, value: new Date().toISOString() };
+
+  let match = expr.match(/^YEAR\s*\((.*)\)$/i);
+  if (match) return { handled: true, value: yearFromSqlValue(valueOf(row, match[1])) };
+
+  match = expr.match(/^CAST\s*\(([\s\S]+)\s+AS\s+([A-Za-z]+(?:\s*\([^)]*\))?)\)$/i);
+  if (match) return { handled: true, value: convertSqlValue(valueOf(row, match[1]), match[2]) };
+
+  match = expr.match(/^CONVERT\s*\(([\s\S]+)\)$/i);
+  if (match) {
+    const args = splitComma(match[1]);
+    if (args.length < 2) throw new Error('CONVERT necesita tipo de dato y expresion.');
+    return { handled: true, value: convertSqlValue(valueOf(row, args[1]), args[0]) };
+  }
+
+  match = expr.match(/^(LOWER|UPPER)\s*\((.+)\)$/i);
+  if (match) { const value = valueOf(row, match[2]); return { handled: true, value: value == null ? null : String(value)[match[1].toUpperCase() === 'LOWER' ? 'toLowerCase' : 'toUpperCase']() }; }
+
+  match = expr.match(/^CONCAT\s*\((.*)\)$/i);
+  if (match) return { handled: true, value: splitComma(match[1]).map((item) => valueOf(row, item) ?? '').join('') };
+
+  match = expr.match(/^SUBSTRING\s*\((.*)\)$/i);
+  if (match) {
+    const [value, start, length] = splitComma(match[1]).map((item) => valueOf(row, item));
+    return { handled: true, value: String(value ?? '').substring(Number(start) - 1, Number(start) - 1 + Number(length)) };
+  }
+
+  match = expr.match(/^COALESCE\s*\((.*)\)$/i);
+  if (match) {
+    for (const item of splitComma(match[1])) {
+      const value = valueOf(row, item);
+      if (value != null) return { handled: true, value };
+    }
+    return { handled: true, value: null };
+  }
+
+  const arithmetic = arithmeticExpression(expr);
+  if (arithmetic) {
+    const left = valueOf(row, arithmetic.left); const right = valueOf(row, arithmetic.right);
+    if (left == null || right == null) return { handled: true, value: null };
+    const a = Number(left); const b = Number(right);
+    if (Number.isNaN(a) || Number.isNaN(b)) throw new Error(`No se pudo evaluar la expresion aritmetica: ${expr}`);
+    return { handled: true, value: ({ '+': a + b, '-': a - b, '*': a * b, '/': b === 0 ? null : a / b })[arithmetic.operator] };
+  }
+
+  return { handled: false };
 }
 
 function clause(sql, name, stops) {
@@ -503,6 +793,101 @@ function countTopLevelJoins(sql) {
   return count;
 }
 
+function keywordAt(upper, index, keyword) {
+  return upper.startsWith(keyword, index)
+    && (index === 0 || !/\w/.test(upper[index - 1]))
+    && (index + keyword.length >= upper.length || !/\w/.test(upper[index + keyword.length]));
+}
+
+function splitSetOperations(sql) {
+  const upper = sql.toUpperCase();
+  const parts = []; const operators = [];
+  let depth = 0; let quoted = false; let start = 0;
+  for (let i = 0; i < upper.length; i += 1) {
+    if (upper[i] === "'" && upper[i + 1] === "'") { i += 1; continue; }
+    if (upper[i] === "'") { quoted = !quoted; continue; }
+    if (quoted) continue;
+    if (upper[i] === '(') { depth += 1; continue; }
+    if (upper[i] === ')') { depth -= 1; continue; }
+    if (depth !== 0) continue;
+    const operator = ['INTERSECT', 'EXCEPT', 'MINUS', 'UNION'].find((item) => keywordAt(upper, i, item));
+    if (!operator) continue;
+    parts.push(sql.slice(start, i).trim());
+    operators.push(operator === 'MINUS' ? 'EXCEPT' : operator);
+    i += operator.length - 1;
+    const allMatch = upper.slice(i + 1).match(/^\s+ALL\b/);
+    if (operator === 'UNION' && allMatch) i += allMatch[0].length;
+    start = i + 1;
+  }
+  if (!operators.length) return null;
+  parts.push(sql.slice(start).trim());
+  if (parts.some((part) => !/^SELECT\b/i.test(part))) throw new Error('Los operadores de conjuntos solo pueden combinar consultas SELECT completas.');
+  return { parts, operators };
+}
+
+const setValue = (row, column) => row[column] === undefined ? null : row[column];
+const setRowSignature = (row, columns) => JSON.stringify(columns.map((column) => setValue(row, column)));
+const resultColumns = (execution, sqlPart) => {
+  const row = execution.result[0] || execution.steps.find((item) => item.type === 'SELECT')?.rows[0];
+  if (row) return Object.keys(row);
+  const rawSelectText = clause(sqlPart, 'SELECT', ['FROM']) || '';
+  const selectText = rawSelectText.replace(/^DISTINCT\s+/i, '').replace(/^TOP\s+\d+\s+/i, '');
+  if (selectText.trim() === '*') return [];
+  return splitComma(selectText).map((field) => selectFieldParts(field).alias);
+};
+const domainOfValue = (value) => {
+  if (value == null) return 'UNKNOWN';
+  if (typeof value === 'number') return 'NUMBER';
+  if (typeof value === 'boolean') return 'BOOLEAN';
+  return parseSqlDate(value) != null ? 'DATE' : 'STRING';
+};
+const columnDomain = (rows, column) => {
+  let domain = 'UNKNOWN';
+  rows.forEach((row) => {
+    const next = domainOfValue(setValue(row, column));
+    if (next === 'UNKNOWN') return;
+    if (domain === 'UNKNOWN') domain = next;
+    else if (domain !== next) domain = 'MIXED';
+  });
+  return domain;
+};
+function validateSetCompatibility(leftRows, rightRows, leftColumns, rightColumns) {
+  if (leftColumns.length !== rightColumns.length) throw new Error(`Union incompatible: ambas consultas deben devolver la misma cantidad de columnas (${leftColumns.length} y ${rightColumns.length}).`);
+  leftColumns.forEach((column, index) => {
+    const leftDomain = columnDomain(leftRows, column);
+    const rightDomain = columnDomain(rightRows, rightColumns[index]);
+    if (leftDomain !== 'UNKNOWN' && rightDomain !== 'UNKNOWN' && leftDomain !== rightDomain) throw new Error(`Union incompatible: la columna ${index + 1} combina dominios ${leftDomain} y ${rightDomain}.`);
+  });
+}
+
+function rowsBySetOperator(operator, leftRows, rightRows, columns) {
+  const rightSignatures = new Set(rightRows.map((row) => setRowSignature(row, columns)));
+  if (operator === 'UNION') return [...new Map([...leftRows, ...rightRows].map((row) => [setRowSignature(row, columns), row])).values()];
+  if (operator === 'INTERSECT') return [...new Map(leftRows.filter((row) => rightSignatures.has(setRowSignature(row, columns))).map((row) => [setRowSignature(row, columns), row])).values()];
+  return [...new Map(leftRows.filter((row) => !rightSignatures.has(setRowSignature(row, columns))).map((row) => [setRowSignature(row, columns), row])).values()];
+}
+
+function executeSetQuery(sql, db, outerRow = {}) {
+  const setQuery = splitSetOperations(sql);
+  if (!setQuery) return null;
+  let leftExecution = executeSelect(setQuery.parts[0], db, outerRow);
+  let columns = resultColumns(leftExecution, setQuery.parts[0]);
+  let result = leftExecution.result;
+  const steps = [...leftExecution.steps];
+  setQuery.operators.forEach((operator, index) => {
+    const rightExecution = executeSelect(setQuery.parts[index + 1], db, outerRow);
+    const rightColumns = resultColumns(rightExecution, setQuery.parts[index + 1]);
+    validateSetCompatibility(result, rightExecution.result, columns, rightColumns);
+    const mappedRightRows = rightExecution.result.map((row) => Object.fromEntries(columns.map((column, columnIndex) => [column, setValue(row, rightColumns[columnIndex])])));
+    const beforeLeft = result.length;
+    result = rowsBySetOperator(operator, result, mappedRightRows, columns);
+    steps.push(step(operator, `Operador ${operator}`, `${operator} combina una relacion de ${beforeLeft} filas con otra de ${mappedRightRows.length}. Se exige union compatible: igual cantidad de columnas y dominios correspondientes en el mismo orden.`, result, operator === 'UNION' ? 'green' : operator === 'INTERSECT' ? 'cyan' : 'red'));
+    leftExecution = { ...rightExecution, result };
+    columns = resultColumns({ ...leftExecution, result }, setQuery.parts[0]);
+  });
+  return { result, steps, statement: 'SELECT', message: `${result.length} filas devueltas` };
+}
+
 function aggregateValue(expression, rows) {
   const match = expression.match(/^(COUNT|SUM|AVG|MIN|MAX)\s*\((.*?)\)$/i);
   if (!match) return valueOf(rows[0] || {}, expression);
@@ -516,7 +901,36 @@ function aggregateValue(expression, rows) {
   return values.reduce((a, b) => compareSqlValues(a, b) > 0 ? a : b);
 }
 
+function aggregateExpressions(text = '') {
+  const result = [];
+  text.replace(/(COUNT|SUM|AVG|MIN|MAX)\s*\((.*?)\)/gi, (match) => {
+    const normalized = match.replace(/\s+/g, ' ').trim();
+    if (!result.some((item) => item.toLowerCase() === normalized.toLowerCase())) result.push(normalized);
+    return match;
+  });
+  return result;
+}
+
+function groupDisplayRows(groups, groupText, aggregateTexts = []) {
+  const keys = groupText ? splitComma(groupText) : [];
+  return groups.map((group) => {
+    const row = {};
+    if (keys.length) {
+      const values = JSON.parse(group.key);
+      keys.forEach((key, index) => { row[stripAlias(normalizeIdentifier(key))] = values[index]; });
+    } else {
+      row.grupo = group.key;
+    }
+    row.filas = group.rows.length;
+    aggregateTexts.forEach((expression) => { row[expression] = aggregateValue(expression, group.rows); });
+    return row;
+  });
+}
+
 const aggregatePattern = /\b(COUNT|SUM|AVG|MIN|MAX)\s*\(/i;
+function assertNoAggregateInWhere(whereText) {
+  if (aggregatePattern.test(removeSubqueries(whereText))) throw new Error('NUNCA va una función sumaria en el WHERE. Usá HAVING para condiciones sobre grupos.');
+}
 const normalizeExpression = (expression) => normalizeIdentifier(expression).replace(/\s+/g, ' ').trim().toLowerCase();
 const selectFieldParts = (field) => {
   const trimmed = field.trim();
@@ -534,7 +948,7 @@ function validateSelectGrouping(selectText, groupText) {
     const grouped = splitComma(groupText).map(normalizeExpression);
     for (const { expression } of fields) {
       if (aggregatePattern.test(expression)) continue;
-      if (!grouped.includes(normalizeExpression(expression))) throw new Error(`La columna "${expression}" no es valida en la lista SELECT porque no esta contenida en GROUP BY ni en una funcion de agregado.`);
+      if (!grouped.includes(normalizeExpression(expression))) throw new Error(`Las columnas del SELECT sin función de grupo DEBEN estar en el GROUP BY. Columna: ${expression}.`);
     }
     return;
   }
@@ -548,30 +962,13 @@ function validateSelectGrouping(selectText, groupText) {
 
 function calculate(expression, rows) {
   const expr = expression.trim();
-  if (/^CURRENT_DATE(?:\(\))?$/i.test(expr)) return new Date().toISOString().slice(0, 10);
-  if (/^CURRENT_TIMESTAMP(?:\(\))?$/i.test(expr)) return new Date().toISOString();
   const round = expr.match(/^ROUND\s*\((.*),\s*(\d+)\)$/i);
   if (round) {
     const value = calculate(round[1], rows);
     return value == null ? null : Number(Number(value).toFixed(Number(round[2])));
   }
-  const lower = expr.match(/^(LOWER|UPPER)\s*\((.+)\)$/i);
-  if (lower) { const value = valueOf(rows[0], lower[2]); return value == null ? null : String(value)[lower[1].toUpperCase() === 'LOWER' ? 'toLowerCase' : 'toUpperCase'](); }
-  const concat = expr.match(/^CONCAT\s*\((.*)\)$/i);
-  if (concat) return splitComma(concat[1]).map((item) => calculate(item, rows) ?? '').join('');
-  const substring = expr.match(/^SUBSTRING\s*\((.*)\)$/i);
-  if (substring) {
-    const [value, start, length] = splitComma(substring[1]).map((item) => calculate(item, rows));
-    return String(value ?? '').substring(Number(start) - 1, Number(start) - 1 + Number(length));
-  }
-  const coalesce = expr.match(/^COALESCE\s*\((.*)\)$/i);
-  if (coalesce) {
-    for (const item of splitComma(coalesce[1])) {
-      const value = calculate(item, rows);
-      if (value != null) return value;
-    }
-    return null;
-  }
+  const scalar = scalarValue(rows[0] || {}, expr);
+  if (scalar.handled) return scalar.value;
   return aggregateValue(expr, rows);
 }
 
@@ -591,10 +988,33 @@ const orderValue = (resultRow, group, key) => {
 
 const nullsForRow = (row) => Object.fromEntries(Object.keys(row || {}).filter((key) => !key.startsWith('__')).map((key) => [key, null]));
 
+function splitAndTerms(expression) {
+  const normalized = expression.trim();
+  const and = splitLogic(normalized, 'AND');
+  return and ? [...splitAndTerms(and[0]), ...splitAndTerms(and[1])] : [normalized];
+}
+
+function joinKeyPairs(condition) {
+  return splitAndTerms(condition).map((term) => {
+    let expr = term.trim();
+    while (isWrappedExpression(expr)) expr = expr.slice(1, -1).trim();
+    const match = expr.match(/^([A-Za-z_]\w*\.[A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*\.[A-Za-z_]\w*)$/);
+    if (!match) return null;
+    return {
+      left: match[1],
+      right: match[2],
+      leftColumn: stripAlias(match[1]),
+      rightColumn: stripAlias(match[2]),
+      label: stripAlias(match[1]).toLowerCase() === stripAlias(match[2]).toLowerCase() ? `${match[1]} = ${match[2]}` : `${stripAlias(match[1])} = ${stripAlias(match[2])}`
+    };
+  }).filter(Boolean);
+}
+
 const step = (type, title, detail, rows, accent = 'blue', compare = null) => ({ type, title, detail, rows: displayRows(rows), count: rows.length, accent, compare });
 
-function executeSelect(sql, db) {
+function executeSelect(sql, db, outerRow = {}) {
   const rawSelectText = clause(sql, 'SELECT', ['FROM']);
+  if (/\(\s*SELECT\b/i.test(rawSelectText) || hasTopLevelSelectKeyword(rawSelectText)) throw new Error('No se permiten subconsultas en la lista del SELECT.');
   const isDistinct = /^DISTINCT\s+/i.test(rawSelectText);
   const selectText = rawSelectText.replace(/^DISTINCT\s+/i, '');
   const fromText = clause(sql, 'FROM', ['INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'JOIN', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY', 'OFFSET', 'LIMIT']);
@@ -605,7 +1025,7 @@ function executeSelect(sql, db) {
   const baseName = findTable(db, baseMatch[1]);
   if (!baseName) throw new Error(`La tabla "${baseMatch[1]}" no existe en este sandbox.`);
   const baseAlias = baseMatch[2] || baseName;
-  let rows = db[baseName].map((row) => qualify(row, baseAlias));
+  let rows = db[baseName].map((row) => ({ ...outerRow, ...qualify(row, baseAlias) }));
   const steps = [step('FROM', `Leer ${baseName}`, `${rows.length} filas entran al flujo desde la tabla original.`, db[baseName], 'violet')];
 
   const joinRegex = /\b(?:(INNER|LEFT|RIGHT|FULL)\s+)?JOIN\s+(\w+)(?:\s+(?:AS\s+)?(\w+))?\s+ON\s+([\s\S]*?)(?=\s+(?:INNER|LEFT|RIGHT|FULL)?\s*JOIN\b|\s+WHERE\b|\s+GROUP\s+BY\b|\s+HAVING\b|\s+ORDER\s+BY\b|$)/gi;
@@ -616,35 +1036,52 @@ function executeSelect(sql, db) {
     if (!tableName) throw new Error(`La tabla "${join[2]}" no existe.`);
     const alias = join[3] || tableName; const rightRows = db[tableName].map((r) => qualify(r, alias));
     const beforeJoin = rows;
+    const candidatePairs = beforeJoin.flatMap((left) => rightRows.map((right) => ({ ...left, ...right })));
     const leftNulls = nullsForRow(beforeJoin[0]);
     const rightNulls = nullsForRow(rightRows[0] || qualify(Object.fromEntries(tableColumns(db[tableName]).map((column) => [column, null])), alias));
-    const combined = [];
+    const combined = []; const outerVirtualRows = [];
     rows.forEach((left) => {
       const matches = rightRows.filter((right) => isSqlTrue(testCondition({ ...left, ...right }, join[4], db)));
       if (matches.length) matches.forEach((right) => combined.push({ ...left, ...right }));
-      else if (kind === 'LEFT' || kind === 'FULL') combined.push({ ...left, ...rightNulls });
+      else if (kind === 'LEFT' || kind === 'FULL') { const virtual = { ...left, ...rightNulls }; combined.push(virtual); outerVirtualRows.push(virtual); }
     });
     if (kind === 'RIGHT' || kind === 'FULL') rightRows.forEach((right) => {
-      if (!rows.some((left) => isSqlTrue(testCondition({ ...left, ...right }, join[4], db)))) combined.push({ ...leftNulls, ...right });
+      if (!rows.some((left) => isSqlTrue(testCondition({ ...left, ...right }, join[4], db)))) { const virtual = { ...leftNulls, ...right }; combined.push(virtual); outerVirtualRows.push(virtual); }
     });
     rows = combined;
     const beforeColumns = new Set(displayRows(beforeJoin).flatMap((row) => Object.keys(row)));
     const addedColumns = [...new Set(displayRows(rows).flatMap((row) => Object.keys(row)).filter((column) => !beforeColumns.has(column)))];
+    const joinKeys = joinKeyPairs(join[4]);
     steps.push(step('SOURCE', `Leer ${tableName}`, `${rightRows.length} filas entran desde la tabla relacionada.`, db[tableName], 'violet'));
-    steps.push(step('JOIN', `${kind} JOIN con ${tableName}`, `Se comparan las claves de ambas tablas mediante ${join[4]}. Las columnas nuevas se resaltan en verde.`, rows, 'cyan', { kind: 'join', addedColumns }));
+    const outerDetail = outerVirtualRows.length ? ` Como es ${kind} JOIN, se fabrican ${outerVirtualRows.length} fila(s) virtual(es) con NULL para no perder filas sin pareja.` : '';
+    steps.push(step('JOIN', `${kind} JOIN con ${tableName}`, `FROM compone el producto cartesiano ${beforeJoin.length} x ${rightRows.length} = ${candidatePairs.length} pares. ON (${join[4]}) conserva ${rows.length} filas combinadas y descarta los pares que no cumplen.${outerDetail} Las columnas nuevas se resaltan en verde.`, rows, 'cyan', { kind: 'join', addedColumns, joinKeys, selectAll: selectText.trim() === '*', beforeRows: displayRows(candidatePairs), outerVirtualRows: displayRows(outerVirtualRows), joinKind: kind, condition: join[4], cartesianCount: candidatePairs.length }));
   }
   if (joinCount !== countTopLevelJoins(sql)) throw new Error('Cada JOIN debe declarar una condicion explicita con ON.');
 
   const whereText = clause(sql, 'WHERE', ['GROUP BY', 'HAVING', 'ORDER BY', 'OFFSET', 'LIMIT']);
   if (whereText) {
+    if (hasTopLevelSelectKeyword(whereText)) throw new Error('La subconsulta debe estar encerrada entre paréntesis.');
+    assertNoAggregateInWhere(whereText);
     const subquerySteps = [];
     const hasSubq = /\(\s*SELECT\b/i.test(whereText);
     const whereComparedColumn = hasSubq ? whereText.match(/^([\s\S]+?)\s*(?:(?:>=|<=|<>|!=|=|>|<)(?:\s+ALL)?|NOT\s+IN|IN)\s*\(\s*SELECT/i)?.[1]?.trim() : undefined;
     const whereCompare = { kind: 'filter', beforeRows: displayRows(rows) };
     if (whereComparedColumn) whereCompare.comparedColumn = whereComparedColumn;
-    const resolvedWhere = hasSubq ? resolveSubqueries(whereText, db, subquerySteps) : whereText;
+    let resolvedWhere = whereText;
+    let correlatedWhere = false;
+    if (hasSubq) {
+      try { resolvedWhere = resolveSubqueries(whereText, db, subquerySteps); }
+      catch (err) { correlatedWhere = true; resolvedWhere = whereText; }
+    }
+    const beforeRows = rows; const before = rows.length; rows = rows.filter((row) => {
+      const resultStart = subquerySteps.subqueryResults?.length || 0;
+      const condition = hasSubq && correlatedWhere ? resolveSubqueries(whereText, db, subquerySteps, row) : resolvedWhere;
+      const verdict = testCondition(row, condition, correlatedWhere ? undefined : db);
+      annotateSubqueryVerdict(subquerySteps, resultStart, condition, verdict);
+      return isSqlTrue(verdict);
+    });
     if (subquerySteps.length) whereCompare.subquerySteps = subquerySteps;
-    const beforeRows = rows; const before = rows.length; rows = rows.filter((row) => isSqlTrue(testCondition(row, resolvedWhere)));
+    if (subquerySteps.subqueryResults?.length) whereCompare.subqueryResults = subquerySteps.subqueryResults;
     steps.push(step('WHERE', 'Filtrar filas', `${whereText}. Se conservan ${rows.length} de ${before} filas. Las filas descartadas se muestran en rojo.`, rows, 'amber', whereCompare));
   }
   const groupText = clause(sql, 'GROUP BY', ['HAVING', 'ORDER BY', 'OFFSET', 'LIMIT']);
@@ -655,29 +1092,44 @@ function executeSelect(sql, db) {
     const map = new Map();
     rows.forEach((row) => { const key = JSON.stringify(keys.map((k) => valueOf(row, k))); if (!map.has(key)) map.set(key, []); map.get(key).push(row); });
     groups = [...map.entries()].map(([key, groupedRows]) => ({ key, rows: groupedRows }));
-    steps.push(step('GROUP BY', 'Formar grupos', `${groupText} genera ${groups.length} grupos para calcular agregados.`, groups.map((g) => ({
-      grupo: JSON.parse(g.key).join(' / '),
-      filas: g.rows.length,
-      muestra: g.rows.slice(0, 3).map((row) => JSON.stringify(displayRows([row])[0])).join(' | ')
-    })), 'green'));
+    steps.push(step('GROUP BY', 'Formar grupos', `${groupText} genera ${groups.length} grupos para calcular agregados.`, groupDisplayRows(groups, groupText), 'green'));
   } else if (!aggregatePattern.test(selectText)) groups = rows.map((row, i) => ({ key: i, rows: [row] }));
 
   const havingText = clause(sql, 'HAVING', ['ORDER BY', 'OFFSET', 'LIMIT']);
   if (havingText) {
+    if (hasTopLevelSelectKeyword(havingText)) throw new Error('La subconsulta debe estar encerrada entre paréntesis.');
     const subquerySteps = [];
-    const resolvedHaving = /\(\s*SELECT\b/i.test(havingText) ? resolveSubqueries(havingText, db, subquerySteps) : havingText;
+    const hasHavingSubq = /\(\s*SELECT\b/i.test(havingText);
+    let resolvedHaving = havingText;
+    let correlatedHaving = false;
+    if (hasHavingSubq) {
+      try { resolvedHaving = resolveSubqueries(havingText, db, subquerySteps); }
+      catch (err) { correlatedHaving = true; }
+    }
+    const havingAggregates = aggregateExpressions(removeSubqueries(havingText));
+    const beforeRows = groupDisplayRows(groups, groupText, havingAggregates);
     const before = groups.length;
     groups = groups.filter((group) => {
-      const expanded = resolvedHaving.replace(/(COUNT|SUM|AVG|MIN|MAX)\s*\((.*?)\)/gi, (m) => String(aggregateValue(m, group.rows)));
-      return isSqlTrue(testCondition(group.rows[0] || {}, expanded));
+      const resultStart = subquerySteps.subqueryResults?.length || 0;
+      const perGroupHaving = hasHavingSubq ? (correlatedHaving ? resolveSubqueries(havingText, db, subquerySteps, group.rows[0] || {}) : resolvedHaving) : havingText;
+      const expanded = perGroupHaving.replace(/(COUNT|SUM|AVG|MIN|MAX)\s*\((.*?)\)/gi, (m) => String(aggregateValue(m, group.rows)));
+      const verdict = testCondition(group.rows[0] || {}, expanded);
+      annotateSubqueryVerdict(subquerySteps, resultStart, expanded, verdict);
+      return isSqlTrue(verdict);
     });
-    const havingCompare = {};
+    const afterRows = groupDisplayRows(groups, groupText, havingAggregates);
+    const havingCompare = { kind: 'filter', beforeRows, unit: 'grupos' };
     if (subquerySteps.length) havingCompare.subquerySteps = subquerySteps;
-    steps.push(step('HAVING', 'Filtrar grupos', `${havingText}. Se conservan ${groups.length} de ${before} grupos.`, groups.map((g) => ({ grupo: g.key, filas: g.rows.length })), 'orange', havingCompare));
+    if (subquerySteps.subqueryResults?.length) havingCompare.subqueryResults = subquerySteps.subqueryResults;
+    const aggregateDetail = havingAggregates.length ? ` Se calcula ${havingAggregates.join(', ')} en cada grupo para evaluar la condicion.` : '';
+    steps.push(step('HAVING', 'Filtrar grupos', `${havingText}.${aggregateDetail} Se conservan ${groups.length} de ${before} grupos. Los grupos descartados se muestran en rojo.`, afterRows, 'orange', havingCompare));
   }
 
+  const beforeSelectRows = displayRows(groups.flatMap((group) => group.rows));
   let result = project(groups, selectText.replace(/^TOP\s+\d+\s+/i, ''));
-  steps.push(step('SELECT', 'Proyectar columnas', `Solo permanecen: ${selectText}.`, result, 'blue'));
+  const selectedColumns = new Set(result.flatMap((row) => Object.keys(row)));
+  const projectedAwayColumns = [...new Set(beforeSelectRows.flatMap((row) => Object.keys(row)).filter((column) => !selectedColumns.has(column)))];
+  steps.push(step('SELECT', 'Proyectar columnas', `Solo permanecen: ${selectText}. Las columnas descartadas por la proyeccion se muestran tachadas en rojo.`, result, 'blue', { kind: 'project', beforeRows: beforeSelectRows, removedColumns: projectedAwayColumns }));
   if (isDistinct) {
     result = [...new Map(result.map((row) => [rowSignature(row), row])).values()];
     steps.push(step('DISTINCT', 'Eliminar duplicados', `DISTINCT conserva ${result.length} filas unicas.`, result, 'green'));
@@ -724,16 +1176,24 @@ function executeMutation(sql, db) {
   }
   if ((match = sql.match(/^UPDATE\s+(\w+)\s+SET\s+([\s\S]*?)(?:\s+WHERE\s+([\s\S]+))?$/i))) {
     const table = findTable(next, match[1]); if (!table) throw new Error(`La tabla "${match[1]}" no existe.`);
+    if (match[3]) {
+      if (hasTopLevelSelectKeyword(match[3])) throw new Error('La subconsulta debe estar encerrada entre paréntesis.');
+      assertNoAggregateInWhere(match[3]);
+    }
     const assignments = splitComma(match[2]).map((item) => item.match(/^(\w+)\s*=\s*(.+)$/)).filter(Boolean).map((item) => [item[0], requireColumn(next[table], table, item[1]), item[2]]);
     if (!assignments.length) throw new Error('UPDATE necesita al menos una asignacion valida en SET.');
     const affected = [];
     const columns = tableColumns(next[table]);
-    next[table] = rememberColumns(next[table].map((row) => { if (match[3] && !isSqlTrue(testCondition(row, match[3], next))) return row; const changed = { ...row }; assignments.forEach((a) => { changed[a[1]] = unquote(a[2]); }); affected.push(changed); return changed; }), columns, tableColumnTypes(next[table]), tableConstraints(next[table]));
+    next[table] = rememberColumns(next[table].map((row) => { if (match[3] && !isSqlTrue(testCondition(row, match[3], next))) return row; const changed = { ...row }; assignments.forEach((a) => { changed[a[1]] = valueOf(changed, a[2]); }); affected.push(changed); return changed; }), columns, tableColumnTypes(next[table]), tableConstraints(next[table]));
     validateDatabaseIntegrity(next);
     return { db: next, result: affected, statement: 'UPDATE', message: `${affected.length} filas actualizadas`, steps: [step('WHERE', 'Localizar filas', match[3] || 'Sin WHERE: se seleccionan todas las filas.', affected, 'amber'), step('SET', 'Aplicar cambios', match[2], affected, 'blue'), step('UPDATE', 'Tabla actualizada', 'El cambio no sale de este sandbox.', next[table], 'green')] };
   }
   if ((match = sql.match(/^DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+([\s\S]+))?$/i))) {
     const table = findTable(next, match[1]); if (!table) throw new Error(`La tabla "${match[1]}" no existe.`);
+    if (match[2]) {
+      if (hasTopLevelSelectKeyword(match[2])) throw new Error('La subconsulta debe estar encerrada entre paréntesis.');
+      assertNoAggregateInWhere(match[2]);
+    }
     const columns = tableColumns(next[table]);
     const removed = next[table].filter((r) => !match[2] || isSqlTrue(testCondition(r, match[2], next)));
     next[table] = rememberColumns(next[table].filter((r) => match[2] && !isSqlTrue(testCondition(r, match[2], next))), columns, tableColumnTypes(next[table]), tableConstraints(next[table]));
@@ -754,23 +1214,26 @@ function executeDdl(sql, db) {
     target = match[1];
     if (findTable(next, target)) throw new Error(`La tabla "${target}" ya existe.`);
     const rawDefinitions = splitComma(match[2]);
+    if (!rawDefinitions.length || rawDefinitions.some((definition) => !definition.trim())) throw new Error('Error de sintaxis en CREATE TABLE: se esperaba una definicion de columna o restriccion entre comas.');
     const definitions = rawDefinitions.map(columnDefinition).filter(Boolean);
     const constraints = [
       ...rawDefinitions.map(constraintDefinition).filter(Boolean),
       ...definitions.flatMap((definition) => definition.constraint)
     ];
     const columns = definitions.map((definition) => definition.name);
+    if (!columns.length) throw new Error('CREATE TABLE necesita al menos una columna.');
+    if (new Set(columns.map((column) => column.toLowerCase())).size !== columns.length) throw new Error(`CREATE TABLE contiene columnas duplicadas en "${target}".`);
     const columnTypes = Object.fromEntries(definitions.map((definition) => [definition.name, definition.type]));
     next[target] = rememberColumns([], columns, columnTypes, constraints);
     validateDatabaseIntegrity(next);
     detail = `Se crea la tabla temporal con columnas: ${columns.join(', ')}.`;
-  } else if ((match = sql.match(/^ALTER\s+TABLE\s+(\w+)\s+ADD\s+(?:COLUMN\s+)?(\w+)(?:\s+[\w()]+)?(?:\s+DEFAULT\s+(.+))?$/i))) {
+  } else if ((match = sql.match(/^ALTER\s+TABLE\s+(\w+)\s+ADD\s+(?:COLUMN\s+)?(\w+)\s+([A-Za-z]+(?:\s*\([^)]*\))?)(?:\s+DEFAULT\s+(.+))?$/i))) {
     target = findTable(next, match[1]);
     if (!target) throw new Error(`La tabla "${match[1]}" no existe.`);
     if (columnName(next[target], match[2])) throw new Error(`La columna "${match[2]}" ya existe en la tabla "${target}".`);
-    const initial = match[3] == null ? null : unquote(match[3]);
-    const typeMatch = sql.match(/^ALTER\s+TABLE\s+\w+\s+ADD\s+(?:COLUMN\s+)?\w+\s+([\w]+(?:\([^)]*\))?)/i);
-    next[target] = rememberColumns(next[target].map((row) => ({ ...row, [match[2]]: initial })), [...new Set([...tableColumns(next[target]), match[2]])], { ...tableColumnTypes(next[target]), [match[2]]: typeMatch?.[1]?.toUpperCase() || 'UNKNOWN' }, tableConstraints(next[target]));
+    validateColumnType(match[3]);
+    const initial = match[4] == null ? null : unquote(match[4]);
+    next[target] = rememberColumns(next[target].map((row) => ({ ...row, [match[2]]: initial })), [...new Set([...tableColumns(next[target]), match[2]])], { ...tableColumnTypes(next[target]), [match[2]]: match[3].replace(/\s+/g, '').toUpperCase() }, tableConstraints(next[target]));
     validateDatabaseIntegrity(next);
     detail = `La columna ${match[2]} se agrega a todas las filas.`;
   } else if ((match = sql.match(/^ALTER\s+TABLE\s+(\w+)\s+DROP\s+COLUMN\s+(\w+)$/i))) {
@@ -815,10 +1278,10 @@ function executeDdl(sql, db) {
   return { db: next, result: rows, statement: command, message: `${command} procesado`, steps: [step('PARSE', 'Validar definicion', 'Se identifican el comando, el objeto y sus opciones.', rows, 'violet'), step(command, `${command}: ${target}`, detail, rows, 'blue')] };
 }
 
-export function executeSql(input, database) {
+export function executeSql(input, database, outerRow = {}) {
   const sql = clean(input);
   if (!sql) throw new Error('Escribe una consulta antes de ejecutar.');
-  if (/^SELECT\b/i.test(sql)) return { ...executeSelect(sql, database), db: database };
+  if (/^SELECT\b/i.test(sql)) return { ...(executeSetQuery(sql, database, outerRow) || executeSelect(sql, database, outerRow)), db: database };
   if (/^(INSERT|UPDATE|DELETE)\b/i.test(sql)) return executeMutation(sql, database);
   const ddl = executeDdl(sql, database);
   if (ddl) return ddl;

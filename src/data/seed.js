@@ -39,40 +39,44 @@ export const createSeedDatabase = () => ({
     { type: 'PRIMARY KEY', columns: ['order_id'] },
     { type: 'FOREIGN KEY', columns: ['customer_id'], references: { table: 'Customers', columns: ['customer_id'] } }
   ]),
+  CustomerImports: table([
+    { import_id: 9001, customer_id: 1, source: 'web' },
+    { import_id: 9002, customer_id: 99, source: 'legacy' },
+    { import_id: 9003, customer_id: null, source: 'manual' }
+  ], ['import_id', 'customer_id', 'source'], { import_id: 'INT', customer_id: 'INT', source: 'VARCHAR(40)' }, [{ type: 'PRIMARY KEY', columns: ['import_id'] }]),
   Employees: table([
-    { employee_id: 1, name: 'Laura Perez', department: 'Ventas', salary: 950000 },
-    { employee_id: 2, name: 'Mateo Ruiz', department: 'Tecnologia', salary: 1350000 },
-    { employee_id: 3, name: 'Sofia Diaz', department: 'Ventas', salary: 1020000 }
-  ], ['employee_id', 'name', 'department', 'salary'], { employee_id: 'INT', name: 'VARCHAR(100)', department: 'VARCHAR(80)', salary: 'DECIMAL(12,2)' }, [{ type: 'PRIMARY KEY', columns: ['employee_id'] }])
+    { employee_id: 1, name: 'Laura Perez', department: 'Ventas', salary: 950000, manager_id: null },
+    { employee_id: 2, name: 'Mateo Ruiz', department: 'Tecnologia', salary: 1350000, manager_id: null },
+    { employee_id: 3, name: 'Sofia Diaz', department: 'Ventas', salary: 1020000, manager_id: 1 }
+  ], ['employee_id', 'name', 'department', 'salary', 'manager_id'], { employee_id: 'INT', name: 'VARCHAR(100)', department: 'VARCHAR(80)', salary: 'DECIMAL(12,2)', manager_id: 'INT' }, [{ type: 'PRIMARY KEY', columns: ['employee_id'] }])
 });
 
 export const examples = [
   { id: 'select', label: 'SELECT columnas', level: 'Inicial', sql: 'SELECT customer_id, first_name, last_name, email\nFROM Customers;' },
   { id: 'where', label: 'WHERE y ORDER BY', level: 'Inicial', sql: 'SELECT name, price, stock\nFROM Products\nWHERE price > 70\nORDER BY price DESC;' },
   { id: 'logic', label: 'AND / OR', level: 'Inicial', sql: "SELECT name, price, stock\nFROM Products\nWHERE (price > 100 AND stock > 10) OR stock = 0;" },
+  { id: 'not', label: 'NOT', level: 'Inicial', sql: "SELECT name, price, stock\nFROM Products\nWHERE NOT stock = 0;" },
   { id: 'like', label: 'LIKE', level: 'Inicial', sql: "SELECT first_name, last_name, city\nFROM Customers\nWHERE first_name LIKE 'A%';" },
-  { id: 'join', label: 'INNER JOIN', level: 'Intermedio', sql: 'SELECT c.first_name, c.last_name, o.order_id, o.total\nFROM Customers c\nINNER JOIN Orders o ON c.customer_id = o.customer_id\nORDER BY o.total DESC;' },
-  { id: 'left', label: 'LEFT JOIN y NULL', level: 'Intermedio', sql: 'SELECT c.first_name, c.city, o.order_id, o.status\nFROM Customers c\nLEFT JOIN Orders o ON c.customer_id = o.customer_id;' },
-  { id: 'group', label: 'GROUP BY + AVG', level: 'Intermedio', sql: 'SELECT category_id, COUNT(*) AS products, ROUND(AVG(price), 2) AS average_price\nFROM Products\nGROUP BY category_id\nHAVING COUNT(*) >= 2\nORDER BY average_price DESC;' },
+  { id: 'group', label: 'GROUP BY + AVG', level: 'Intermedio', sql: 'SELECT category_id, COUNT(*) AS products, AVG(price) AS average_price\nFROM Products\nGROUP BY category_id\nHAVING COUNT(*) >= 2\nORDER BY average_price DESC;' },
   { id: 'sum', label: 'SUM + GROUP BY', level: 'Intermedio', sql: 'SELECT status, COUNT(*) AS orders, SUM(total) AS revenue\nFROM Orders\nGROUP BY status\nORDER BY revenue DESC;' },
-  { id: 'aggregates', label: 'MIN / MAX / AVG', level: 'Intermedio', sql: 'SELECT MIN(price) AS cheapest, MAX(price) AS most_expensive, ROUND(AVG(price), 2) AS average\nFROM Products;' },
+  { id: 'aggregates', label: 'MIN / MAX / AVG', level: 'Intermedio', sql: 'SELECT MIN(price) AS cheapest, MAX(price) AS most_expensive, AVG(price) AS average\nFROM Products;' },
   { id: 'between', label: 'BETWEEN', level: 'Inicial', sql: 'SELECT name, price\nFROM Products\nWHERE price BETWEEN 70 AND 200;' },
   { id: 'in', label: 'IN', level: 'Inicial', sql: "SELECT first_name, city\nFROM Customers\nWHERE city IN ('Buenos Aires', 'Rosario');" },
   { id: 'null', label: 'IS NULL', level: 'Inicial', sql: 'SELECT first_name, last_name, email\nFROM Customers\nWHERE email IS NULL;' },
-  { id: 'functions', label: 'Funciones de texto', level: 'Intermedio', sql: "SELECT customer_id, CONCAT(UPPER(last_name), ', ', first_name) AS display_name, COALESCE(email, 'Sin email') AS contact\nFROM Customers\nORDER BY customer_id;" },
-  { id: 'substring', label: 'SUBSTRING y fecha', level: 'Intermedio', sql: 'SELECT name, SUBSTRING(name, 1, 4) AS short_name, CURRENT_DATE AS today\nFROM Products;' },
-  { id: 'pagination', label: 'OFFSET / FETCH', level: 'Intermedio', sql: 'SELECT product_id, name, price\nFROM Products\nORDER BY price DESC\nOFFSET 2 ROWS FETCH NEXT 3 ROWS ONLY;' },
-  { id: 'right', label: 'RIGHT JOIN', level: 'Avanzado', sql: 'SELECT c.first_name, o.order_id, o.status\nFROM Customers c\nRIGHT JOIN Orders o ON c.customer_id = o.customer_id;' },
-  { id: 'full', label: 'FULL JOIN', level: 'Avanzado', sql: 'SELECT c.first_name, o.order_id, o.status\nFROM Customers c\nFULL JOIN Orders o ON c.customer_id = o.customer_id;' },
+  { id: 'join-inner', label: 'INNER JOIN composición', level: 'Intermedio', sql: 'SELECT c.customer_id, c.first_name, o.order_id, o.total\nFROM Customers c\nINNER JOIN Orders o ON c.customer_id = o.customer_id\nORDER BY c.customer_id;' },
+  { id: 'join-left', label: 'LEFT JOIN + NULL', level: 'Intermedio', sql: 'SELECT c.customer_id, c.first_name, o.order_id, o.status\nFROM Customers c\nLEFT JOIN Orders o ON c.customer_id = o.customer_id\nORDER BY c.customer_id;' },
+  { id: 'join-right', label: 'RIGHT JOIN + NULL', level: 'Intermedio', sql: 'SELECT c.customer_id, c.first_name, i.import_id, i.source\nFROM Customers c\nRIGHT JOIN CustomerImports i ON c.customer_id = i.customer_id\nORDER BY i.import_id;' },
+  { id: 'join-full', label: 'FULL JOIN completo', level: 'Intermedio', sql: 'SELECT c.customer_id, c.first_name, i.import_id, i.source\nFROM Customers c\nFULL JOIN CustomerImports i ON c.customer_id = i.customer_id\nORDER BY c.customer_id;' },
+  { id: 'join-self', label: 'Self-Join empleados', level: 'Intermedio', sql: 'SELECT e.employee_id, e.name AS employee_name, m.name AS manager_name\nFROM Employees e\nLEFT JOIN Employees m ON e.manager_id = m.employee_id\nORDER BY e.employee_id;' },
+  { id: 'subquery', label: 'Subconsulta WHERE', level: 'Avanzado', sql: 'SELECT name, price, stock\nFROM Products\nWHERE price > (\n  SELECT AVG(price)\n  FROM Products\n)\nORDER BY price DESC;' },
+  { id: 'subquery-having', label: 'Subconsulta HAVING', level: 'Avanzado', sql: "SELECT department, AVG(salary) AS avg_salary\nFROM Employees\nGROUP BY department\nHAVING AVG(salary) >= ALL (\n  SELECT AVG(salary)\n  FROM Employees\n  GROUP BY department\n);" },
+  { id: 'exists', label: 'EXISTS', level: 'Avanzado', sql: 'SELECT first_name, last_name\nFROM Customers c\nWHERE EXISTS (\n  SELECT *\n  FROM Orders o\n  WHERE o.customer_id = c.customer_id\n)\nORDER BY first_name;' },
+  { id: 'any', label: 'ANY / SOME', level: 'Avanzado', sql: 'SELECT name, price\nFROM Products\nWHERE price > ANY (\n  SELECT price\n  FROM Products\n  WHERE category_id = 2\n)\nORDER BY price DESC;' },
+  { id: 'except', label: 'EXCEPT', level: 'Avanzado', sql: 'SELECT category_id\nFROM Products\nEXCEPT\nSELECT category_id\nFROM Products\nWHERE stock = 0;' },
+  { id: 'date-conversion', label: 'YEAR + CAST', level: 'Intermedio', sql: "SELECT order_id, total, order_date\nFROM Orders\nWHERE YEAR(order_date) = 2026\n  AND order_date >= CAST('2026-03-01' AS DATE);" },
   { id: 'update', label: 'UPDATE', level: 'Intermedio', sql: "UPDATE Products\nSET stock = 10\nWHERE name = 'Blender';" },
   { id: 'insert', label: 'INSERT', level: 'Intermedio', sql: "INSERT INTO Categories (category_id, name)\nVALUES (4, 'Books');" },
-  { id: 'delete', label: 'DELETE', level: 'Intermedio', sql: "DELETE FROM Orders\nWHERE status = 'cancelled';" },
-  { id: 'create', label: 'CREATE TABLE', level: 'Avanzado', sql: 'CREATE TABLE Suppliers (\n  supplier_id INT PRIMARY KEY,\n  name VARCHAR(100) NOT NULL\n);' },
-  { id: 'alter', label: 'ALTER TABLE', level: 'Avanzado', sql: "ALTER TABLE Products ADD featured INT DEFAULT 0;" },
-  { id: 'view', label: 'CREATE VIEW', level: 'Avanzado', sql: "CREATE VIEW ActiveOrders AS\nSELECT order_id, customer_id, total\nFROM Orders\nWHERE status = 'completed';" },
-  { id: 'index', label: 'CREATE INDEX', level: 'Avanzado', sql: 'CREATE INDEX idx_products_category\nON Products (category_id);' },
-  { id: 'truncate', label: 'TRUNCATE', level: 'Avanzado', sql: 'TRUNCATE TABLE Employees;' },
-  { id: 'drop', label: 'DROP TABLE', level: 'Avanzado', sql: 'DROP TABLE Employees;' }
+  { id: 'delete', label: 'DELETE', level: 'Intermedio', sql: "DELETE FROM Orders\nWHERE status = 'cancelled';" }
 ];
 
 export const concepts = [
