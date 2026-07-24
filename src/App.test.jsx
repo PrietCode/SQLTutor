@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, test, vi } from 'vitest';
 import App from './App';
@@ -8,6 +8,25 @@ import { SQL_IMPORT_MAX_BYTES } from './services/sqlImportService';
 const runSql = async (user, sql) => {
   await user.type(screen.getByLabelText(/consulta sql/i), sql);
   await user.click(screen.getByRole('button', { name: /^Ejecutar$/i }));
+};
+
+const replaceSqlAndRun = async (user, sql) => {
+  const editor = screen.getByLabelText(/consulta sql/i);
+  fireEvent.change(editor, { target: { value: sql } });
+  await user.click(screen.getByRole('button', { name: /^Ejecutar$/i }));
+  return editor;
+};
+
+const openSandbox = async (user) => {
+  const schemaButton = screen.getByRole('button', { name: /Abrir base de datos/i });
+  await user.click(schemaButton);
+  return { schemaButton, schemaDialog: await screen.findByRole('dialog', { name: /Base de datos del sandbox/i }) };
+};
+
+const openRestoreDialog = async (user, schemaDialog) => {
+  const restoreButton = within(schemaDialog).getByRole('button', { name: /Restaurar base de ejemplo/i });
+  await user.click(restoreButton);
+  return { restoreButton, restoreDialog: await screen.findByRole('dialog', { name: /Restaurar base de ejemplo/i }) };
 };
 
 const expectFocus = async (element) => {
@@ -154,6 +173,105 @@ describe('App SQL flows', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /Base de datos del sandbox/i })).toBeNull());
     await expectFocus(schemaButton);
+  });
+
+  test('opens the restore confirmation from the sandbox with cancel focused', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const { schemaDialog } = await openSandbox(user);
+    const { restoreDialog } = await openRestoreDialog(user, schemaDialog);
+    const cancelButton = within(restoreDialog).getByRole('button', { name: /Cancelar/i });
+
+    expect(within(restoreDialog).getByText(/Se eliminaran las tablas creadas/i)).toBeTruthy();
+    await expectFocus(cancelButton);
+  });
+
+  test('cancels database restoration and keeps sandbox changes', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await replaceSqlAndRun(user, 'CREATE TABLE TemporaryRestoreCancel (id INT PRIMARY KEY);');
+    const { schemaDialog } = await openSandbox(user);
+    expect(within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla TemporaryRestoreCancel/i })).toBeTruthy();
+
+    const { restoreButton, restoreDialog } = await openRestoreDialog(user, schemaDialog);
+    await user.click(within(restoreDialog).getByRole('button', { name: /Cancelar/i }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull());
+    expect(within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla TemporaryRestoreCancel/i })).toBeTruthy();
+    await expectFocus(restoreButton);
+  });
+
+  test('Escape cancels restoration and leaves the sandbox open', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await replaceSqlAndRun(user, 'CREATE TABLE TemporaryRestoreEscape (id INT PRIMARY KEY);');
+    const { schemaDialog } = await openSandbox(user);
+    const { restoreButton } = await openRestoreDialog(user, schemaDialog);
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull());
+    expect(screen.getByRole('dialog', { name: /Base de datos del sandbox/i })).toBeTruthy();
+    expect(within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla TemporaryRestoreEscape/i })).toBeTruthy();
+    await expectFocus(restoreButton);
+  });
+
+  test('confirms restoration, keeps editor and history, and clears the visual execution', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const historySql = 'SELECT first_name FROM Customers WHERE customer_id = 1;';
+
+    await replaceSqlAndRun(user, historySql);
+    await replaceSqlAndRun(user, 'CREATE TABLE TemporaryRestoreConfirm (id INT PRIMARY KEY);');
+    await replaceSqlAndRun(user, "UPDATE Customers SET first_name = 'Alicia' WHERE customer_id = 1;");
+    const editor = await replaceSqlAndRun(user, 'DROP TABLE Employees;');
+
+    const { schemaDialog } = await openSandbox(user);
+    expect(within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla TemporaryRestoreConfirm/i })).toBeTruthy();
+    expect(within(schemaDialog).queryByRole('button', { name: /Ver detalle de tabla Employees/i })).toBeNull();
+
+    const { restoreDialog } = await openRestoreDialog(user, schemaDialog);
+    await user.click(within(restoreDialog).getByRole('button', { name: /^Restaurar base$/i }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull());
+    expect(within(schemaDialog).queryByRole('button', { name: /Ver detalle de tabla TemporaryRestoreConfirm/i })).toBeNull();
+    expect(within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla Employees/i })).toBeTruthy();
+    expect(editor.value).toBe('DROP TABLE Employees;');
+    expect(screen.getByText(/Tu consulta se convert/i)).toBeTruthy();
+
+    await user.click(within(schemaDialog).getByRole('button', { name: /Cerrar base de datos/i }));
+    await replaceSqlAndRun(user, historySql);
+
+    expect((await screen.findAllByText('Ana')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Alicia')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /Abrir historial/i }));
+    expect(within(await screen.findByRole('dialog', { name: /Historial de consultas/i })).getByText(historySql)).toBeTruthy();
+  });
+
+  test('Reset preserves database changes while restore returns to the seed database', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await replaceSqlAndRun(user, "INSERT INTO Categories (category_id, name) VALUES (4, 'Books');");
+    expect((await screen.findAllByText('Books')).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: /Reset/i }));
+    await replaceSqlAndRun(user, 'SELECT name FROM Categories WHERE category_id = 4;');
+    expect((await screen.findAllByText('Books')).length).toBeGreaterThan(0);
+
+    const { schemaDialog } = await openSandbox(user);
+    const { restoreDialog } = await openRestoreDialog(user, schemaDialog);
+    await user.click(within(restoreDialog).getByRole('button', { name: /^Restaurar base$/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull());
+    await user.click(within(schemaDialog).getByRole('button', { name: /Cerrar base de datos/i }));
+
+    await replaceSqlAndRun(user, 'SELECT name FROM Categories WHERE category_id = 4;');
+    expect(screen.queryByText('Books')).toBeNull();
+    expect(screen.getAllByText(/0 filas devueltas/i).length).toBeGreaterThan(0);
   });
 
   test('imports a valid SQL file and applies it to the temporary database', async () => {

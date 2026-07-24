@@ -58,9 +58,16 @@ export function useSqlRuntime() {
     commitDatabase(next);
     return next;
   };
+  const restoreSeedDatabase = () => {
+    const next = createSeedDatabase();
+    commitDatabase(next);
+    setExecution(null);
+    setError('');
+    return next;
+  };
   const clearExecution = () => { setExecution(null); setError(''); };
   const clearError = () => setError('');
   const showError = (message) => setError(message);
 
-  return { database, execution, error, executeQuery, executeScript, executeSandboxSql, deleteTable, clearExecution, clearError, showError };
+  return { database, execution, error, executeQuery, executeScript, executeSandboxSql, deleteTable, restoreSeedDatabase, clearExecution, clearError, showError };
 }

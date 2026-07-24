@@ -4,9 +4,30 @@ import { Icon } from '../ui/Icon';
 import { CreateTableForm } from './CreateTableForm';
 import { TableDetailModal } from './TableDetailModal';
 
-export function SchemaPanel({ database, open, onClose, onCreateTable, onDeleteTable }) {
+function RestoreDatabaseDialog({ open, onCancel, onConfirm }) {
+  const dialogRef = useBlockingOverlayAccessibility(open, onCancel);
+
+  if (!open) return null;
+  return <div ref={dialogRef} className="table-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="restore-database-title" aria-describedby="restore-database-description" tabIndex={-1} onClick={onCancel}>
+    <div className="table-detail-modal history-modal" onClick={(event) => event.stopPropagation()}>
+      <div className="detail-header">
+        <div><span className="eyebrow">ACCION DESTRUCTIVA</span><h2 id="restore-database-title"><Icon name="database" /> Restaurar base de ejemplo</h2></div>
+      </div>
+      <section className="detail-card" id="restore-database-description">
+        <p className="muted">Se eliminaran las tablas creadas, se descartaran los cambios de datos y se recuperara la base inicial. Esta accion no puede deshacerse dentro de la sesion.</p>
+      </section>
+      <div className="form-buttons">
+        <button type="button" className="ghost-button" onClick={onCancel}>Cancelar</button>
+        <button type="button" className="primary-button" onClick={onConfirm}>Restaurar base</button>
+      </div>
+    </div>
+  </div>;
+}
+
+export function SchemaPanel({ database, open, onClose, onCreateTable, onDeleteTable, onRestoreDatabase }) {
   const [selectedTable, setSelectedTable] = useState(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const panelRef = useBlockingOverlayAccessibility(open, onClose);
   const [createSql, setCreateSql] = useState(`CREATE TABLE Proveedores (
   id INT PRIMARY KEY,
@@ -23,6 +44,12 @@ export function SchemaPanel({ database, open, onClose, onCreateTable, onDeleteTa
   };
   const handleDeleteTable = (name) => {
     if (onDeleteTable(name) && selectedTable === name) setSelectedTable(null);
+  };
+  const cancelRestoreDatabase = () => setRestoreDialogOpen(false);
+  const confirmRestoreDatabase = () => {
+    onRestoreDatabase();
+    setSelectedTable(null);
+    setRestoreDialogOpen(false);
   };
 
   return <aside ref={panelRef} className={`side-panel schema-panel ${open ? 'open' : ''}`} role="dialog" aria-modal="true" aria-label="Base de datos del sandbox" aria-hidden={open ? undefined : true} inert={open ? undefined : ''} tabIndex={-1}>
@@ -42,6 +69,12 @@ export function SchemaPanel({ database, open, onClose, onCreateTable, onDeleteTa
     </div>
 
     {isCreateOpen && <CreateTableForm createSql={createSql} onCreateSqlChange={setCreateSql} onSubmit={handleCreateTable} onCancel={() => setIsCreateOpen(false)} />}
+
+    <div className="schema-actions">
+      <button type="button" className="secondary-button add-table-btn" onClick={() => setRestoreDialogOpen(true)} aria-haspopup="dialog">
+        Restaurar base de ejemplo
+      </button>
+    </div>
 
     <div className="schema-list">
       {Object.entries(database).map(([name, rows]) => {
@@ -64,6 +97,7 @@ export function SchemaPanel({ database, open, onClose, onCreateTable, onDeleteTa
     </div>
 
     {selectedTable && database[selectedTable] && <TableDetailModal tableName={selectedTable} rows={database[selectedTable]} onClose={() => setSelectedTable(null)} />}
+    <RestoreDatabaseDialog open={restoreDialogOpen} onCancel={cancelRestoreDatabase} onConfirm={confirmRestoreDatabase} />
 
     <div className="sandbox-note">
       <Icon name="bulb" />
