@@ -1,7 +1,8 @@
 import React from 'react';
+import { DataTable } from '../tables/DataTable';
 import { Icon } from '../ui/Icon';
 
-export const createResultPanel = (DataTable) => function ResultPanel({ execution }) {
+export function ResultPanel({ execution }) {
   return <section className={`step-controller-card ${!execution ? 'empty' : ''}`}>
     <div className="controller-header">
       <div className="title-area"><Icon name="table" /><h3>Resultados</h3></div>
@@ -12,4 +13,4 @@ export const createResultPanel = (DataTable) => function ResultPanel({ execution
     </div>
     {execution && <div className="controller-footer"><span className="muted">{execution.message}</span></div>}
   </section>;
-};
+}
