@@ -14,6 +14,9 @@
 
 - Reordenar y organizar `styles.css` siguiendo una estructura lógica y consistente, con el objetivo de mejorar su legibilidad, mantenibilidad y facilitar la incorporación de nuevos desarrolladores al proyecto.
 
+Estado: pendiente.
+Prioridad: Alta.
+
 ### Documentación de usuario en /docs
 
 - Agregar documentacion orientada a usuarios sobre uso, ejemplos, motor SQL local y limites pedagogicos.
