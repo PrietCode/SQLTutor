@@ -6,22 +6,10 @@
 - Tests UI basicos con Vitest, jsdom y Testing Library.
 - Accesibilidad de overlays bloqueantes con foco inicial, focus trap, Escape y retorno de foco.
 - Importacion SQL robusta para `.sql` y `.txt`, con limite de 1 MB, validacion de contenido vacio, BOM inicial y reutilizacion del input.
+- Boton Restaurar base de ejemplo
 
 ## Próximas mejoras
 
-### Restaurar base de ejemplo
-
-- Agregar una acción independiente llamada “Restaurar base de ejemplo”.
-- No debe compartir comportamiento con el botón para limpiar el editor.
-- Debe advertir que se eliminarán las tablas y registros temporales.
-- Debe solicitar confirmación antes de ejecutar la restauración.
-- Debe llamar a `createSeedDatabase()` solamente después de la confirmación.
-- Debe limpiar la ejecución visual incompatible con la nueva base.
-- No debe modificar las preferencias visuales del usuario.
-- No debe eliminar el historial salvo que se decida expresamente.
-
-Estado: pendiente.
-Prioridad: media.
 
 ### Documentación de usuario en /docs
 
@@ -44,21 +32,21 @@ Prioridad: baja.
 - Explicar de forma clara qué SQL se soporta, qué casos son simulados y qué queda fuera del alcance actual.
 
 Estado: pendiente.
-Prioridad: media.
+Prioridad: baja.
 
 ### Ruta de aprendizaje
 
 - Definir una secuencia guiada de contenidos para aprender consultas SQL progresivamente.
 
 Estado: pendiente.
-Prioridad: alta.
+Prioridad: Asignar luego de presentación.
 
 ### Ejercicios
 
 - Agregar prácticas con consignas, datos iniciales y resultados esperados.
 
 Estado: pendiente.
-Prioridad: alta.
+Prioridad: Asignar luego de presentación.
 
 ### Pistas y correcciones pedagógicas
 
