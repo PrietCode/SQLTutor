@@ -46,3 +46,11 @@ Comandos disponibles:
 
 - [Arquitectura](docs/ARCHITECTURE.md)
 - [Roadmap](docs/ROADMAP.md)
+
+ATENCION!!
+Este proyecto fue desarrollado con el apoyo de herramientas de inteligencia artificial. Aunque el código fue revisado y probado durante el proceso, es posible que algunas secciones presenten diferencias de estilo, una complejidad mayor a la necesaria o decisiones técnicas que puedan mejorarse.
+
+Los reportes de errores, vulnerabilidades y oportunidades de mejora son bienvenidos. Para contribuir, podés crear una rama con los cambios propuestos y abrir un pull request explicando brevemente el problema identificado y la solución implementada.
+
+Cada aporte será revisado y considerado con atención.
+Gracias por tu interés y por dedicar tiempo a explorar el proyecto.
