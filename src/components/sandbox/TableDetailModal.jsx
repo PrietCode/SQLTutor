@@ -1,4 +1,5 @@
 import React from 'react';
+import { useBlockingOverlayAccessibility } from '../../hooks/useBlockingOverlayAccessibility';
 import { Icon } from '../ui/Icon';
 
 function columnTypeLabel(rows, column) {
@@ -14,11 +15,12 @@ function columnTypeLabel(rows, column) {
 }
 
 export function TableDetailModal({ tableName, rows, onClose }) {
+  const dialogRef = useBlockingOverlayAccessibility(true, onClose);
   const columns = rows.length > 0 ? Object.keys(rows[0]) : (rows.columns || []);
   const foreignKeys = (rows.constraints || []).filter((constraint) => constraint.type === 'FOREIGN KEY');
-  return <div className="table-detail-overlay" role="dialog" aria-modal="true" aria-label={`Detalle de tabla ${tableName}`}>
+  return <div ref={dialogRef} className="table-detail-overlay" role="dialog" aria-modal="true" aria-label={`Detalle de tabla ${tableName}`} tabIndex={-1}>
     <div className="table-detail-modal">
-      <button className="detail-close-btn" onClick={onClose} aria-label="Cerrar detalle"><Icon name="close" /></button>
+      <button type="button" className="detail-close-btn" onClick={onClose} aria-label="Cerrar detalle"><Icon name="close" /></button>
       <div className="detail-header">
         <div><span className="eyebrow">TABLA DEL SANDBOX</span><h2><Icon name="table" /> {tableName}</h2></div>
         <span className="result-badge">{rows.length} {rows.length === 1 ? 'fila' : 'filas'}</span>

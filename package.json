@@ -7,14 +7,21 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/lib/sqlEngine.test.js"
+    "test:engine": "node --test src/lib/sqlEngine.test.js",
+    "test:ui": "vitest run",
+    "test": "npm run test:engine && npm run test:ui"
   },
   "dependencies": {
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
   "devDependencies": {
+    "@testing-library/dom": "10.4.0",
+    "@testing-library/react": "16.1.0",
+    "@testing-library/user-event": "14.5.2",
     "@vitejs/plugin-react": "4.3.4",
-    "vite": "5.4.21"
+    "jsdom": "25.0.1",
+    "vite": "5.4.21",
+    "vitest": "2.1.9"
   }
 }

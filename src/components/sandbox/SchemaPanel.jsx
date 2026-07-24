@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useBlockingOverlayAccessibility } from '../../hooks/useBlockingOverlayAccessibility';
 import { Icon } from '../ui/Icon';
 import { CreateTableForm } from './CreateTableForm';
 import { TableDetailModal } from './TableDetailModal';
@@ -6,6 +7,7 @@ import { TableDetailModal } from './TableDetailModal';
 export function SchemaPanel({ database, open, onClose, onCreateTable, onDeleteTable }) {
   const [selectedTable, setSelectedTable] = useState(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const panelRef = useBlockingOverlayAccessibility(open, onClose);
   const [createSql, setCreateSql] = useState(`CREATE TABLE Proveedores (
   id INT PRIMARY KEY,
   nombre VARCHAR(100),
@@ -23,18 +25,18 @@ export function SchemaPanel({ database, open, onClose, onCreateTable, onDeleteTa
     if (onDeleteTable(name) && selectedTable === name) setSelectedTable(null);
   };
 
-  return <aside className={`side-panel schema-panel ${open ? 'open' : ''}`}>
+  return <aside ref={panelRef} className={`side-panel schema-panel ${open ? 'open' : ''}`} role="dialog" aria-modal="true" aria-label="Base de datos del sandbox" aria-hidden={open ? undefined : true} inert={open ? undefined : ''} tabIndex={-1}>
     <div className="panel-heading">
       <div>
         <span className="eyebrow">SANDBOX LOCAL</span>
         <h2><Icon name="database" /> Base de datos</h2>
       </div>
-      <button className="icon-button" onClick={onClose} aria-label="Cerrar"><Icon name="close" /></button>
+      <button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar base de datos"><Icon name="close" /></button>
     </div>
     <p className="muted">Los cambios viven solo en esta pestaña.</p>
 
     <div className="schema-actions">
-      <button className="secondary-button add-table-btn" onClick={() => setIsCreateOpen(!isCreateOpen)}>
+      <button type="button" className="secondary-button add-table-btn" onClick={() => setIsCreateOpen(!isCreateOpen)} aria-expanded={isCreateOpen}>
         {isCreateOpen ? 'Cancelar' : '+ Nueva Tabla (SQL)'}
       </button>
     </div>
@@ -47,12 +49,12 @@ export function SchemaPanel({ database, open, onClose, onCreateTable, onDeleteTa
         return (
           <div className={`schema-card ${isSelected ? 'expanded' : ''}`} key={name}>
             <div className="schema-card-header">
-              <button className="expand-toggle-btn" onClick={() => setSelectedTable(name)}>
+              <button type="button" className="expand-toggle-btn" onClick={() => setSelectedTable(name)} aria-label={`Ver detalle de tabla ${name}`}>
                 <span><Icon name="table" size={16} />{name}</span>
                 <small>{rows.length} filas</small>
                 <Icon name="chevron" size={15} />
               </button>
-              <button className="delete-table-btn" onClick={() => handleDeleteTable(name)} title={`Borrar tabla ${name}`}>
+              <button type="button" className="delete-table-btn" onClick={() => handleDeleteTable(name)} title={`Borrar tabla ${name}`} aria-label={`Borrar tabla ${name}`}>
                 <Icon name="close" size={14} />
               </button>
             </div>
