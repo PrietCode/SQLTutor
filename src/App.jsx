@@ -1,7 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { examples } from './data/examples';
-import { createSeedDatabase } from './data/seed';
-import { executeSql, executeSqlScript, splitSqlStatements } from './lib/sqlEngine';
 import { SqlEditor } from './components/editor/SqlEditor';
 import { ExplanationPanel } from './components/explanation/ExplanationPanel';
 import { HistoryModal } from './components/history/HistoryModal';
@@ -15,58 +13,37 @@ import { Icon } from './components/ui/Icon';
 import { useBodyScrollLock } from './hooks/useBodyScrollLock';
 import { useOverlayState } from './hooks/useOverlayState';
 import { useSqlFileImport } from './hooks/useSqlFileImport';
+import { useSqlRuntime } from './hooks/useSqlRuntime';
 import { buildVisualSteps } from './visual/visualSteps';
 
-const hasTerminatingSemicolon = (input) => {
-  let quoted = false; let lineComment = false; let blockComment = false; let last = '';
-  for (let i = 0; i < input.length; i += 1) {
-    const char = input[i]; const next = input[i + 1];
-    if (lineComment) { if (char === '\n') lineComment = false; continue; }
-    if (blockComment) { if (char === '*' && next === '/') { blockComment = false; i += 1; } continue; }
-    if (!quoted && char === '-' && next === '-') { lineComment = true; i += 1; continue; }
-    if (!quoted && char === '/' && next === '*') { blockComment = true; i += 1; continue; }
-    if (char === "'" && next === "'") { if (!/\s/.test(char)) last = char; i += 1; continue; }
-    if (!quoted && char === ';') { last = ';'; continue; }
-    if (char === "'") quoted = !quoted;
-    if (!/\s/.test(char)) last = char;
-  }
-  return last === ';';
-};
-
 export default function App() {
-  const [database, setDatabase] = useState(createSeedDatabase);
   const [selectedExample, setSelectedExample] = useState('');
   const [sql, setSql] = useState('');
-  const [execution, setExecution] = useState(null);
   const [activeStep, setActiveStep] = useState(0);
   const [showAll, setShowAll] = useState(true);
   const [stepMode, setStepMode] = useState(false);
-  const [error, setError] = useState('');
   const [history, setHistory] = useState([]);
   const [darkMode, setDarkMode] = useState(false);
   const timer = useRef();
-  const databaseRef = useRef(database);
+  const { database, execution, error, executeQuery, executeScript, executeSandboxSql, deleteTable, clearExecution, clearError, showError } = useSqlRuntime();
   const { schemaOpen, explainOpen, historyOpen, libraryOpen, overlayOpen, openSchema, openLibrary, openHistory, closeSchema, closeLibrary, closeHistory, closeOverlays, toggleExplain } = useOverlayState();
   const importSqlFile = async (content, fileName) => {
     clearInterval(timer.current);
-    if (!hasTerminatingSemicolon(content)) throw new Error('El archivo SQL debe finalizar cada sentencia con punto y coma (;).');
-    const next = executeSqlScript(content, databaseRef.current);
-    databaseRef.current = next.db; setDatabase(next.db); setExecution(null); setError(''); setActiveStep(0); setShowAll(true);
+    const next = executeScript(content);
+    setActiveStep(0); setShowAll(true);
     return `${fileName}: ${next.importedStatements} sentencias ejecutadas sobre la base local.`;
   };
-  const { fileInputRef, importMessage, sqlFileAccept, clearImportMessage, openImportFileDialog, handleImportFileChange } = useSqlFileImport({ onImportSqlFile: importSqlFile, onError: setError });
+  const { fileInputRef, importMessage, sqlFileAccept, clearImportMessage, openImportFileDialog, handleImportFileChange } = useSqlFileImport({ onImportSqlFile: importSqlFile, onError: showError });
 
-  useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); clearImportMessage(); } }, [selectedExample]);
-  useEffect(() => { databaseRef.current = database; }, [database]);
+  useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); clearError(); clearImportMessage(); } }, [selectedExample]);
   useEffect(() => () => clearInterval(timer.current), []);
   const visualSteps = useMemo(() => buildVisualSteps(execution), [execution]);
   useEffect(() => { if (activeStep >= visualSteps.length) setActiveStep(Math.max(visualSteps.length - 1, 0)); }, [activeStep, visualSteps.length]);
   const changeSql = (value) => { setSql(value); setSelectedExample(''); };
-  const selectExample = (value) => { setSelectedExample(value); if (!value) { setSql(''); setError(''); clearImportMessage(); } };
+  const selectExample = (value) => { setSelectedExample(value); if (!value) { setSql(''); clearError(); clearImportMessage(); } };
   const createSandboxTable = (createSql) => {
     try {
-      const result = executeSql(createSql, database);
-      setDatabase(result.db);
+      const result = executeSandboxSql(createSql);
       return Object.keys(result.db).find(k => !Object.keys(database).includes(k)) || 'Proveedores';
     } catch (err) {
       alert(`Error al crear la tabla: ${err.message}`);
@@ -75,28 +52,25 @@ export default function App() {
   };
   const deleteSandboxTable = (name) => {
     if (window.confirm(`¿Estás seguro de que querés eliminar la tabla "${name}"?`)) {
-      const next = { ...database };
-      delete next[name];
-      setDatabase(next);
+      deleteTable(name);
       return true;
     }
     return false;
   };
   const run = (startStep = false) => {
     clearInterval(timer.current);
-    try {
-      if (!hasTerminatingSemicolon(sql)) throw new Error('La sentencia SQL debe finalizar con punto y coma (;).');
-      const statements = splitSqlStatements(sql);
-      const next = statements.length > 1 ? executeSqlScript(sql, databaseRef.current) : executeSql(sql, databaseRef.current); databaseRef.current = next.db; setExecution(next); setDatabase(next.db); setError(''); clearImportMessage(); setActiveStep(0); setShowAll(!startStep); setStepMode(startStep);
-      setHistory((items) => [{ sql, time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) }, ...items.filter((x) => x.sql !== sql)].slice(0, 8));
-    } catch (err) { setError(err.message); clearImportMessage(); setExecution(null); }
+    const next = executeQuery(sql);
+    clearImportMessage();
+    if (!next) return;
+    setActiveStep(0); setShowAll(!startStep); setStepMode(startStep);
+    setHistory((items) => [{ sql, time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) }, ...items.filter((x) => x.sql !== sql)].slice(0, 8));
   };
   const toggleStepMode = () => {
     if (stepMode) { setStepMode(false); setShowAll(true); }
     else if (execution) { setStepMode(true); setShowAll(false); setActiveStep(0); }
     else { run(true); }
   };
-  const clearEditorExecution = () => { clearInterval(timer.current); setSql(''); setSelectedExample(''); setExecution(null); setError(''); clearImportMessage(); setActiveStep(0); setShowAll(true); setStepMode(false); };
+  const clearEditorExecution = () => { clearInterval(timer.current); setSql(''); setSelectedExample(''); clearExecution(); clearImportMessage(); setActiveStep(0); setShowAll(true); setStepMode(false); };
   const activeVisualStep = visualSteps[Math.min(activeStep, Math.max(visualSteps.length - 1, 0))]?.item;
   const activeResult = useMemo(() => activeVisualStep?.rows || [], [activeVisualStep]);
   const activeClause = activeVisualStep?.parentType || activeVisualStep?.type || '';
