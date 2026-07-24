@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSeedDatabase, examples } from '../data/seed.js';
+import { examples } from '../data/examples.js';
+import { createSeedDatabase } from '../data/seed.js';
 import { executeSql, executeSqlScript, splitSqlStatements } from './sqlEngine.js';
 
 test('all bundled examples execute without errors', () => {

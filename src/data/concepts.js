@@ -1,0 +1,20 @@
+export const concepts = [
+  { term: 'SELECT', text: 'Elige las columnas que formaran el resultado.' },
+  { term: 'WHERE', text: 'Filtra filas antes de agrupar o calcular agregados.' },
+  { term: 'JOIN', text: 'Combina filas relacionadas de dos tablas.' },
+  { term: 'GROUP BY', text: 'Reune filas que comparten uno o mas valores.' },
+  { term: 'HAVING', text: 'Filtra grupos despues de calcular agregados.' },
+  { term: 'NULL', text: 'Representa un dato ausente; se evalua con IS NULL.' },
+  { term: 'PK / FK', text: 'Una clave primaria identifica; una foranea relaciona tablas.' },
+  { term: 'INDEX', text: 'Estructura auxiliar que acelera busquedas a cambio de espacio y escritura.' },
+  { term: 'VIEW', text: 'Consulta guardada que se comporta como una tabla virtual.' },
+  { term: 'ACID', text: 'Atomicidad, consistencia, aislamiento y durabilidad hacen confiables las transacciones.' },
+  { term: 'Data Types', text: 'INT, DECIMAL, VARCHAR, DATE y otros tipos restringen los valores permitidos.' },
+  { term: 'Transaction', text: 'Agrupa operaciones como una unidad que puede confirmarse con COMMIT o revertirse con ROLLBACK.' },
+  { term: 'Normalization', text: 'Organiza datos para reducir duplicacion y dependencias incorrectas mediante formas normales.' },
+  { term: 'String Functions', text: 'CONCAT, SUBSTRING, LOWER y UPPER transforman texto dentro de una consulta.' },
+  { term: 'Date Functions', text: 'CURRENT_DATE y CURRENT_TIMESTAMP obtienen la fecha o instante actual.' },
+  { term: 'Wildcards', text: 'En LIKE, % representa cualquier secuencia y _ representa exactamente un caracter.' },
+  { term: 'COALESCE', text: 'Devuelve el primer valor que no sea NULL de una lista.' },
+  { term: 'DDL', text: 'CREATE, ALTER, DROP y TRUNCATE definen o modifican la estructura de los datos.' }
+];

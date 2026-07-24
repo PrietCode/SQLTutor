@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { concepts, createSeedDatabase, examples } from './data/seed';
+import { concepts } from './data/concepts';
+import { examples } from './data/examples';
+import { createSeedDatabase } from './data/seed';
 import { executeSql, executeSqlScript, splitSqlStatements } from './lib/sqlEngine';
 
 const hasTerminatingSemicolon = (input) => {
