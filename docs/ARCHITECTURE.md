@@ -34,8 +34,7 @@ src/
 docs/
 ├── ARCHITECTURE.md
 ├── ARCHITECTURE_AUDIT.md
-├── ROADMAP.md
-└── SQLTutor-source.zip
+└── ROADMAP.md
 ```
 
 Responsabilidades por grupo:
@@ -49,7 +48,6 @@ Responsabilidades por grupo:
 - `src/lib/`: motor SQL y tests del motor.
 - `src/visual/`: helpers puros que adaptan resultados del motor a modelos visuales.
 - `docs/ARCHITECTURE_AUDIT.md`: auditoria historica inicial, actualmente desactualizada respecto de la estructura vigente.
-- `docs/SQLTutor-source.zip`: artefacto dentro de `docs`; no participa del runtime.
 
 ## Flujo de ejecucion SQL
 
@@ -74,7 +72,9 @@ La ejecucion directa de SQL vive en `src/hooks/useSqlRuntime.js`. Los componente
 ```text
 SqlEditor input[type=file]
   -> useSqlFileImport.handleImportFileChange(event)
-  -> sqlImportService valida extension y normaliza contenido
+  -> sqlImportService valida extension y tamano maximo
+  -> file.text()
+  -> sqlImportService normaliza BOM inicial y rechaza contenido vacio
   -> App.importSqlFile(content, fileName)
   -> useSqlRuntime.executeScript(content)
   -> executeSqlScript(content, databaseRef.current)
@@ -82,7 +82,7 @@ SqlEditor input[type=file]
   -> useSqlFileImport muestra mensaje de exito o error
 ```
 
-La lectura del archivo permanece separada de la ejecucion. `useSqlFileImport` no ejecuta SQL; `useSqlRuntime` no accede al DOM ni lee archivos.
+La lectura del archivo permanece separada de la ejecucion. `useSqlFileImport` no ejecuta SQL; `useSqlRuntime` no accede al DOM ni lee archivos. La importacion acepta `.sql` y `.txt`, aplica un limite de 1 MB antes de leer el contenido, limpia el input despues de cada intento y conserva los errores SQL del runtime sin transformarlos en errores de lectura.
 
 ## Base temporal
 
@@ -113,9 +113,10 @@ Los componentes no importan `src/lib/sqlEngine.js`. El estado local se usa donde
 ## Hooks
 
 - `useSqlRuntime()`: responsable de base temporal, ejecucion actual, error, llamadas al motor, ejecucion de scripts, acciones SQL del sandbox, eliminacion de tablas y limpieza de ejecucion/error. API publica: `{ database, execution, error, executeQuery, executeScript, executeSandboxSql, deleteTable, clearExecution, clearError, showError }`.
-- `useSqlFileImport({ onImportSqlFile, onError })`: responsable de input file, validacion de extension, lectura con `file.text()`, reseteo del input y mensaje de importacion. No ejecuta SQL.
+- `useSqlFileImport({ onImportSqlFile, onError })`: responsable de input file, validacion previa de metadata, lectura con `file.text()`, manejo de errores de lectura, preparacion del contenido importado, reseteo del input y mensaje de importacion. No ejecuta SQL.
 - `useOverlayState()`: responsable de apertura/cierre de sandbox, biblioteca, historial y explicacion. Calcula `overlayOpen` sin incluir la explicacion porque no es overlay bloqueante. Usa scroll seguro con guardas para `window`/`document`.
 - `useBodyScrollLock(locked)`: agrega/remueve la clase `overlay-locked` al `body` cuando un overlay bloqueante esta abierto. Limpia en el cleanup del efecto.
+- `useBlockingOverlayAccessibility(open, onClose)`: gestiona foco inicial, focus trap, Escape, retorno de foco y pila de overlays bloqueantes para historial, biblioteca, sandbox y detalle de tabla.
 
 No hay solapamiento critico entre hooks. `useSqlRuntime` es el hook mas amplio, pero su responsabilidad sigue cohesionada porque la base y la ejecucion son inseparables en el contrato del motor.
 
@@ -123,12 +124,17 @@ No hay solapamiento critico entre hooks. `useSqlRuntime` es el hook mas amplio, 
 
 `src/services/sqlImportService.js` define:
 
+- `SQL_IMPORT_ALLOWED_EXTENSIONS`.
 - `SQL_IMPORT_FILE_ACCEPT`.
+- `SQL_IMPORT_MAX_BYTES`.
+- `SQL_IMPORT_MAX_SIZE_LABEL`.
+- `SQL_IMPORT_MESSAGES`.
 - `isSqlImportFile(fileName)`.
+- `validateSqlImportFile(file)`.
 - `normalizeImportedSql(content)`.
 - `prepareImportedSql(content)`.
 
-El servicio es pequeno pero concreto: encapsula reglas pasivas de importacion. No accede al DOM, no ejecuta SQL y no depende de React.
+El servicio es pequeno pero concreto: encapsula reglas pasivas de importacion, extensiones permitidas, limite de tamano, normalizacion segura de BOM inicial y deteccion de contenido vacio. No accede al DOM, no lee archivos, no ejecuta SQL y no depende de React.
 
 ## Motor SQL
 
@@ -207,10 +213,11 @@ Context: no se justifica ahora. Props y hooks locales son suficientes. Tema, run
 
 Infraestructura actual:
 
-- Script: `npm test`.
-- Runner: `node --test`.
-- Archivo: `src/lib/sqlEngine.test.js`.
-- Tests actuales: 50.
+- `npm test`: ejecuta motor, servicio de importacion y UI.
+- `npm run test:engine`: usa `node --test` sobre `src/lib/sqlEngine.test.js`.
+- `npm run test:service`: usa `node --test` sobre `src/services/sqlImportService.test.js`.
+- `npm run test:ui`: usa Vitest con jsdom, Testing Library React y user-event sobre `src/App.test.jsx`.
+- Tests actuales en este corte: 50 del motor, 14 del servicio de importacion y 14 de UI.
 
 Cobertura alta:
 
@@ -224,27 +231,22 @@ Cobertura alta:
 - Operadores de conjuntos.
 - NULL, LIKE, fechas y conversiones.
 - Errores pedagogicos del motor.
+- Reglas puras de importacion: extension, tamano, contenido vacio y BOM inicial.
+- Flujos UI basicos: ejecucion, errores, reset sin restaurar base, historial, overlays accesibles e importacion de archivos.
 
 Cobertura faltante:
 
-- Hooks React (`useSqlRuntime`, `useSqlFileImport`, overlays, scroll lock).
-- Integracion UI de reset sin perder base temporal.
-- Historial y seleccion de consultas previas.
 - Journey, navegacion de pasos y orden escrito/logico.
-- Modales/drawers y accesibilidad interactiva.
 - Estados responsive y comportamiento manual de overlays.
-
-No hay infraestructura de tests de React. No se recomienda instalarla solo para refactors simples; si se agregan funcionalidades de usuario, Testing Library/Vitest o una estrategia equivalente deberian evaluarse con casos reales de UI.
+- Casos visuales finos que requieren validacion manual en navegador real.
 
 ## Limitaciones actuales
 
-- La cobertura automatizada se concentra en el motor; los flujos React dependen de validacion manual.
+- La cobertura automatizada cubre motor, servicio de importacion y flujos UI principales; los detalles responsive y visuales finos dependen de validacion manual.
 - No hay persistencia de historial ni workspace.
 - No hay router ni paginas informativas todavia.
 - `styles.css` es global y extenso; funciona, pero su cascada es sensible al orden.
 - Algunos componentes usan keys por indice para filas sin identificador estable; es aceptable hoy porque son tablas derivadas y efimeras, pero podria ser fragil con edicion interactiva.
-- Los modales y drawers tienen labels y roles basicos, pero no implementan gestion completa de foco ni cierre con Escape.
-- La importacion no define limite de tamano de archivo.
 - `docs/ARCHITECTURE_AUDIT.md` queda como documento historico desactualizado.
 
 ## Proximos pasos recomendados
@@ -252,15 +254,13 @@ No hay infraestructura de tests de React. No se recomienda instalarla solo para 
 Necesarios antes de nuevas funcionalidades grandes:
 
 - Mantener `App.jsx` como coordinador y no crear `useSqlWorkspace` hasta que haya una responsabilidad nueva clara.
-- Definir una estrategia de pruebas UI antes de agregar ejercicios, persistencia o paginas nuevas.
+- Mantener la cobertura UI actual cuando se agreguen ejercicios, persistencia o paginas nuevas.
 - Documentar limitaciones SQL visibles para usuarios antes de ampliar rutas o contenido.
 
 Recomendados:
 
 - Agregar tests unitarios para helpers puros nuevos si se expanden `visual/` o `services/`.
 - Diseñar la accion separada de restaurar base de ejemplo con confirmacion, segun `docs/ROADMAP.md`.
-- Mejorar accesibilidad de modales/drawers con foco inicial, retorno de foco y Escape cuando se trabaje especificamente en UI.
-- Evaluar limite de tamano para archivos SQL importados si se permite importar contenido mas grande.
 
 Futuros:
 

@@ -1,5 +1,8 @@
 # SQLTutor Architecture Audit
 
+> Documento historico. Corresponde a la auditoria inicial previa a las refactorizaciones recientes y no representa la arquitectura vigente.
+> La referencia actual del sistema esta en [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 Fecha: 2026-07-24
 
 Estado: auditoria inicial del repositorio. Este documento describe la arquitectura real actual y propone una ruta incremental de refactorizacion sin reescritura completa.

@@ -1,5 +1,12 @@
 # SQL Tutor Roadmap
 
+## Trabajo reciente completado
+
+- Documentacion de arquitectura vigente en `docs/ARCHITECTURE.md`.
+- Tests UI basicos con Vitest, jsdom y Testing Library.
+- Accesibilidad de overlays bloqueantes con foco inicial, focus trap, Escape y retorno de foco.
+- Importacion SQL robusta para `.sql` y `.txt`, con limite de 1 MB, validacion de contenido vacio, BOM inicial y reutilizacion del input.
+
 ## Próximas mejoras
 
 ### Restaurar base de ejemplo
@@ -16,9 +23,11 @@
 Estado: pendiente.
 Prioridad: media.
 
-### Documentación completa en /docs
+### Documentación de usuario en /docs
 
-- Documentar arquitectura, flujo de datos, motor SQL local, decisiones de diseño y límites pedagógicos.
+- Agregar documentacion orientada a usuarios sobre uso, ejemplos, motor SQL local y limites pedagogicos.
+- Mantener la documentacion tecnica actual en `ARCHITECTURE.md` sin duplicarla.
+- Evaluar Router solamente cuando exista una primera pagina real que lo justifique.
 
 Estado: pendiente.
 Prioridad: media.
