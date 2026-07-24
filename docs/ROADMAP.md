@@ -10,6 +10,9 @@
 
 ## Próximas mejoras
 
+### Reestructuración de `styles.css`
+
+- Reordenar y organizar `styles.css` siguiendo una estructura lógica y consistente, con el objetivo de mejorar su legibilidad, mantenibilidad y facilitar la incorporación de nuevos desarrolladores al proyecto.
 
 ### Documentación de usuario en /docs
 
