@@ -5,6 +5,7 @@ import { createSeedDatabase } from './data/seed';
 import { executeSql, executeSqlScript, splitSqlStatements } from './lib/sqlEngine';
 import { JoinKeyNote } from './components/journey/JoinKeyNote';
 import { ResultPanel } from './components/results/ResultPanel';
+import { SchemaPanel } from './components/sandbox/SchemaPanel';
 import { DataTable } from './components/tables/DataTable';
 import { Icon } from './components/ui/Icon';
 import { hasSubqueryTrace, parentConditionText, parentStepDetail, formatSubqueryValue, subqueryConditionText, subqueryReturnText, buildSubqueryGroups } from './visual/subqueryVisual';
@@ -25,143 +26,6 @@ const hasTerminatingSemicolon = (input) => {
   }
   return last === ';';
 };
-
-function columnTypeLabel(rows, column) {
-  if (rows.columnTypes?.[column]) return rows.columnTypes[column];
-  const values = rows.map((row) => row[column]).filter((value) => value != null);
-  if (!values.length) return 'NULL';
-  if (values.every((value) => typeof value === 'number' && Number.isInteger(value))) return 'INT';
-  if (values.every((value) => typeof value === 'number')) return 'FLOAT';
-  if (values.every((value) => typeof value === 'boolean')) return 'BIT';
-  if (values.every((value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value)))) return 'DATE';
-  const maxLength = Math.max(...values.map((value) => String(value).length));
-  return `VARCHAR(${Math.max(maxLength, 1)})`;
-}
-
-function SchemaPanel({ database, setDatabase, open, onClose }) {
-  const [selectedTable, setSelectedTable] = useState(null);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [createSql, setCreateSql] = useState(`CREATE TABLE Proveedores (
-  id INT PRIMARY KEY,
-  nombre VARCHAR(100),
-  ciudad VARCHAR(50)
-);`);
-
-  const deleteTable = (name) => {
-    if (window.confirm(`¿Estás seguro de que querés eliminar la tabla "${name}"?`)) {
-      const next = { ...database };
-      delete next[name];
-      setDatabase(next);
-      if (selectedTable === name) setSelectedTable(null);
-    }
-  };
-
-  const handleCreateTable = (e) => {
-    e.preventDefault();
-    try {
-      const result = executeSql(createSql, database);
-      setDatabase(result.db);
-      setIsCreateOpen(false);
-      const createdTableName = Object.keys(result.db).find(k => !Object.keys(database).includes(k)) || 'Proveedores';
-      setSelectedTable(createdTableName);
-    } catch (err) {
-      alert(`Error al crear la tabla: ${err.message}`);
-    }
-  };
-
-  return <aside className={`side-panel schema-panel ${open ? 'open' : ''}`}>
-    <div className="panel-heading">
-      <div>
-        <span className="eyebrow">SANDBOX LOCAL</span>
-        <h2><Icon name="database" /> Base de datos</h2>
-      </div>
-      <button className="icon-button" onClick={onClose} aria-label="Cerrar"><Icon name="close" /></button>
-    </div>
-    <p className="muted">Los cambios viven solo en esta pestaña.</p>
-
-    <div className="schema-actions">
-      <button className="secondary-button add-table-btn" onClick={() => setIsCreateOpen(!isCreateOpen)}>
-        {isCreateOpen ? 'Cancelar' : '+ Nueva Tabla (SQL)'}
-      </button>
-    </div>
-
-    {isCreateOpen && (
-      <form onSubmit={handleCreateTable} className="add-table-form">
-        <label>Escribe SQL para crear tabla:</label>
-        <textarea 
-          value={createSql} 
-          onChange={(e) => setCreateSql(e.target.value)} 
-          spellCheck="false"
-        />
-        <div className="form-buttons">
-          <button type="button" className="ghost-button" onClick={() => setIsCreateOpen(false)}>Cancelar</button>
-          <button type="submit" className="primary-button">Crear</button>
-        </div>
-      </form>
-    )}
-
-    <div className="schema-list">
-      {Object.entries(database).map(([name, rows]) => {
-        const isSelected = selectedTable === name;
-        return (
-          <div className={`schema-card ${isSelected ? 'expanded' : ''}`} key={name}>
-            <div className="schema-card-header">
-              <button className="expand-toggle-btn" onClick={() => setSelectedTable(name)}>
-                <span><Icon name="table" size={16} />{name}</span>
-                <small>{rows.length} filas</small>
-                <Icon name="chevron" size={15} />
-              </button>
-              <button className="delete-table-btn" onClick={() => deleteTable(name)} title={`Borrar tabla ${name}`}>
-                <Icon name="close" size={14} />
-              </button>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-
-    {selectedTable && database[selectedTable] && (() => {
-      const rows = database[selectedTable];
-      const columns = rows.length > 0 ? Object.keys(rows[0]) : (rows.columns || []);
-      const foreignKeys = (rows.constraints || []).filter((constraint) => constraint.type === 'FOREIGN KEY');
-      return <div className="table-detail-overlay" role="dialog" aria-modal="true" aria-label={`Detalle de tabla ${selectedTable}`}>
-        <div className="table-detail-modal">
-          <button className="detail-close-btn" onClick={() => setSelectedTable(null)} aria-label="Cerrar detalle"><Icon name="close" /></button>
-          <div className="detail-header">
-            <div><span className="eyebrow">TABLA DEL SANDBOX</span><h2><Icon name="table" /> {selectedTable}</h2></div>
-            <span className="result-badge">{rows.length} {rows.length === 1 ? 'fila' : 'filas'}</span>
-          </div>
-          <div className="detail-grid">
-            <div className="detail-side">
-              <section className="detail-card">
-                <h3>Columnas</h3>
-                <div className="detail-columns">
-                  {columns.length ? columns.map((column, index) => <div key={column} className="detail-column-row"><span className={index === 0 ? 'key-dot' : 'column-dot'}>{index === 0 ? 'PK' : ''}</span><strong>{column}</strong><em>{columnTypeLabel(rows, column)}</em></div>) : <p className="muted">Sin columnas definidas.</p>}
-                </div>
-              </section>
-              <section className="detail-card">
-                <h3>Detalles</h3>
-                {foreignKeys.length ? <div className="fk-list">{foreignKeys.map((fk, index) => <div className="fk-row" key={index}><strong>{fk.columns.join(', ')}</strong><span>es clave foránea de <b>{fk.references.table}</b> ({fk.references.columns.join(', ')})</span></div>)}</div> : <p className="muted">No hay claves foráneas declaradas para esta tabla.</p>}
-              </section>
-            </div>
-            <section className="detail-card records-detail-card">
-              <h3>Registros actuales</h3>
-              {columns.length ? <div className="detail-table-wrap"><table><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{columns.map((column) => <td key={column}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>) : <tr><td colSpan={columns.length}>Tabla vacía: todavía no hay registros.</td></tr>}</tbody></table></div> : <div className="no-records-note">No hay columnas para mostrar.</div>}
-            </section>
-          </div>
-        </div>
-      </div>;
-    })()}
-
-    <div className="sandbox-note">
-      <Icon name="bulb" />
-      <div>
-        <strong>Entorno seguro</strong>
-        <span>Los cambios y tablas nuevas viven solo en esta sesión.</span>
-      </div>
-    </div>
-  </aside>;
-}
 
 const queryKeywords = (sql) => sql.match(/\b(?:SELECT|DISTINCT|FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL JOIN|JOIN|WHERE|GROUP BY|HAVING|ORDER BY|UNION|INTERSECT|EXCEPT|EXISTS|ANY|SOME|ALL|GETDATE|YEAR|CAST|CONVERT|OFFSET|FETCH|VALUES|SET|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE|DROP TABLE|TRUNCATE TABLE|CREATE INDEX|CREATE VIEW)\b/gi) || [];
 const sqlFileAccept = '.sql,.txt';
@@ -384,6 +248,25 @@ export default function App() {
   useEffect(() => () => clearInterval(timer.current), []);
   const visualSteps = useMemo(() => buildVisualSteps(execution), [execution]);
   useEffect(() => { if (activeStep >= visualSteps.length) setActiveStep(Math.max(visualSteps.length - 1, 0)); }, [activeStep, visualSteps.length]);
+  const createSandboxTable = (createSql) => {
+    try {
+      const result = executeSql(createSql, database);
+      setDatabase(result.db);
+      return Object.keys(result.db).find(k => !Object.keys(database).includes(k)) || 'Proveedores';
+    } catch (err) {
+      alert(`Error al crear la tabla: ${err.message}`);
+      return null;
+    }
+  };
+  const deleteSandboxTable = (name) => {
+    if (window.confirm(`¿Estás seguro de que querés eliminar la tabla "${name}"?`)) {
+      const next = { ...database };
+      delete next[name];
+      setDatabase(next);
+      return true;
+    }
+    return false;
+  };
   const run = (startStep = false) => {
     clearInterval(timer.current);
     try {
@@ -433,7 +316,7 @@ export default function App() {
 
   return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
     <header className="topbar"><a className="brand" href="#top"><span className="brand-mark"><Icon name="database" /></span><span>SQL <strong>Tutor</strong><small>Explorador Visual Consultas</small></span></a><nav><button className="nav-icon-button" onClick={() => openOverlayWindow('schema')} aria-label="Abrir base de datos" title="Base de datos"><Icon name="database" /></button><button className={`nav-icon-button ${explainOpen ? 'active' : ''}`} onClick={scrollToGuide} aria-label="Ir a explicación" aria-pressed={explainOpen} title="Explicación"><Icon name="bulb" /></button><button className="nav-icon-button library-shortcut" onClick={() => openOverlayWindow('library')} aria-label="Abrir Biblioteca SQL" title="Biblioteca SQL"><Icon name="book" /></button><button className="library-text-button" onClick={() => openOverlayWindow('library')}><Icon name="book" /> Biblioteca SQL</button></nav><div className="header-actions"><button className="theme-toggle" onClick={() => setDarkMode((value) => !value)} aria-label={darkMode ? 'Activar modo claro' : 'Activar modo oscuro'} title={darkMode ? 'Modo claro' : 'Modo oscuro'}><Icon name={darkMode ? 'sun' : 'moon'} /></button><button className="theme-toggle header-history-button" onClick={() => openOverlayWindow('history')} aria-label="Abrir historial" title="Historial"><Icon name="history" /></button><div className="session-pill"><span /> Sesión temporal</div></div></header>
-    <main id="top"><SchemaPanel database={database} setDatabase={setDatabase} open={schemaOpen} onClose={() => setSchemaOpen(false)} /><div className="workspace-layout"><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, setError, setImportMessage, selectedExample, setSelectedExample, error, importMessage, stepMode }} activeClause={activeClause} onImportSqlFile={importSqlFile} onRun={() => run(false)} onStep={toggleStepMode} onReset={reset} /><ResultPanel execution={execution} /></div><div className={`execution-guide-layout ${explainOpen ? 'guide-open' : ''}`}><div className="execution-main-column"><div className="content-grid"><Journey {...{ execution, visualSteps, activeStep, setActiveStep, showAll, setShowAll, stepMode, setStepMode, sql }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div>{explainOpen && <ExplainPanel {...{ visualSteps, activeStep, stepMode }} open={explainOpen} onClose={() => setExplainOpen(false)} />}</div></div></div></main>
+    <main id="top"><SchemaPanel database={database} open={schemaOpen} onClose={() => setSchemaOpen(false)} onCreateTable={createSandboxTable} onDeleteTable={deleteSandboxTable} /><div className="workspace-layout"><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, setError, setImportMessage, selectedExample, setSelectedExample, error, importMessage, stepMode }} activeClause={activeClause} onImportSqlFile={importSqlFile} onRun={() => run(false)} onStep={toggleStepMode} onReset={reset} /><ResultPanel execution={execution} /></div><div className={`execution-guide-layout ${explainOpen ? 'guide-open' : ''}`}><div className="execution-main-column"><div className="content-grid"><Journey {...{ execution, visualSteps, activeStep, setActiveStep, showAll, setShowAll, stepMode, setStepMode, sql }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div>{explainOpen && <ExplainPanel {...{ visualSteps, activeStep, stepMode }} open={explainOpen} onClose={() => setExplainOpen(false)} />}</div></div></div></main>
     <footer className="app-footer">
       <div className="footer-main"><span>Página realizada por <strong>Prieto Agustin</strong></span><span>Alumno UTNFRC</span><span className="footer-badge">Fase de Pruebas</span></div>
       <p className="footer-legal">Copyright © 2026 Prieto Agustin. Todos los derechos reservados. Uso educativo autorizado. Prohibida la copia, redistribución o explotación comercial sin permiso.</p>
