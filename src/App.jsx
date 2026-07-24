@@ -2,18 +2,19 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { examples } from './data/examples';
 import { createSeedDatabase } from './data/seed';
 import { executeSql, executeSqlScript, splitSqlStatements } from './lib/sqlEngine';
+import { SqlEditor } from './components/editor/SqlEditor';
 import { HistoryModal } from './components/history/HistoryModal';
-import { JoinKeyNote } from './components/journey/JoinKeyNote';
-import { ResultPanel } from './components/results/ResultPanel';
+import { Journey } from './components/journey/Journey';
 import { Scrim } from './components/layout/Scrim';
 import { LibraryDrawer } from './components/library/LibraryDrawer';
+import { ResultPanel } from './components/results/ResultPanel';
 import { SchemaPanel } from './components/sandbox/SchemaPanel';
 import { DataTable } from './components/tables/DataTable';
 import { Icon } from './components/ui/Icon';
 import { useBodyScrollLock } from './hooks/useBodyScrollLock';
 import { useOverlayState } from './hooks/useOverlayState';
-import { hasSubqueryTrace, parentConditionText, parentStepDetail, formatSubqueryValue, subqueryConditionText, subqueryReturnText, buildSubqueryGroups } from './visual/subqueryVisual';
-import { SUBQUERY_STEP_TYPE, buildVisualSteps, writtenOrderIndex } from './visual/visualSteps';
+import { useSqlFileImport } from './hooks/useSqlFileImport';
+import { SUBQUERY_STEP_TYPE, buildVisualSteps } from './visual/visualSteps';
 
 const hasTerminatingSemicolon = (input) => {
   let quoted = false; let lineComment = false; let blockComment = false; let last = '';
@@ -30,157 +31,6 @@ const hasTerminatingSemicolon = (input) => {
   }
   return last === ';';
 };
-
-const queryKeywords = (sql) => sql.match(/\b(?:SELECT|DISTINCT|FROM|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL JOIN|JOIN|WHERE|GROUP BY|HAVING|ORDER BY|UNION|INTERSECT|EXCEPT|EXISTS|ANY|SOME|ALL|GETDATE|YEAR|CAST|CONVERT|OFFSET|FETCH|VALUES|SET|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE|DROP TABLE|TRUNCATE TABLE|CREATE INDEX|CREATE VIEW)\b/gi) || [];
-const sqlFileAccept = '.sql,.txt';
-const isSqlImportFile = (fileName) => /\.(sql|txt)$/i.test(fileName);
-
-function Editor({ sql, setSql, setError, setImportMessage, onRun, onStep, onReset, onImportSqlFile, selectedExample, setSelectedExample, error, importMessage, activeClause, stepMode }) {
-  const textarea = useRef(null);
-  const fileInput = useRef(null);
-  const lineCount = sql.split('\n').length;
-  const handleFile = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!isSqlImportFile(file.name)) {
-      setError('Solo se pueden importar archivos .sql o .txt con instrucciones SQL.');
-      setImportMessage('');
-      event.target.value = '';
-      return;
-    }
-    await onImportSqlFile(await file.text(), file.name);
-    event.target.value = '';
-  };
-  return <section className="editor-card">
-    <div className="editor-toolbar">
-      <div><span className="status-dot" /><strong>Editor SQL</strong><span className="dialect">SQL Server compatible</span></div>
-      <div className="editor-toolbar-tools"><button className="import-file-button" onClick={() => fileInput.current?.click()}><Icon name="upload" /> Importar Archivo SQL</button><input ref={fileInput} type="file" accept={sqlFileAccept} hidden onChange={handleFile} /><div className="example-picker"><label htmlFor="examples">Ejemplo</label><select id="examples" value={selectedExample} onChange={(e) => { const val = e.target.value; setSelectedExample(val); if (!val) { setSql(''); setError(''); setImportMessage(''); } }}><option value="">Seleccionar</option>{examples.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></div></div>
-    </div>
-    <div className="code-editor">
-      <div className="line-numbers">{Array.from({ length: lineCount }, (_, i) => <span key={i}>{i + 1}</span>)}</div>
-      <textarea ref={textarea} value={sql} onChange={(e) => { setSql(e.target.value); setSelectedExample(''); }} spellCheck="false" aria-label="Consulta SQL" onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') onRun(); }} />
-    </div>
-    <div className="query-tracker" aria-label="Clausulas detectadas">
-      <span>Consulta:</span>{queryKeywords(sql).map((keyword, index) => {
-        const normalized = keyword.toUpperCase();
-        const active = normalized === activeClause || (activeClause === 'JOIN' && normalized.includes('JOIN')) || (activeClause === 'LIMIT' && ['OFFSET', 'FETCH'].includes(normalized));
-        return <mark className={active ? 'active' : ''} key={`${keyword}-${index}`}>{keyword}</mark>;
-      })}
-    </div>
-    {error && <div className="error-message"><strong>No se pudo ejecutar.</strong> {error}</div>}
-    {importMessage && <div className="success-message"><strong>Archivo SQL importado.</strong> {importMessage}</div>}
-    <div className="editor-footer">
-      <span className="shortcut"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> para ejecutar</span>
-      <div className="actions"><button className="ghost-button" onClick={onReset}><Icon name="reset" /> Reset</button><button className={stepMode ? 'primary-button' : 'secondary-button'} aria-pressed={stepMode} onClick={onStep}><Icon name="steps" /> Paso a paso</button><button className="primary-button" onClick={onRun}><Icon name="play" /> Ejecutar</button></div>
-    </div>
-  </section>;
-}
-
-const subqueryVerdictText = (summary) => summary.verdict ? `Resultado: ${summary.verdict} (${summary.rowCount} ${summary.rowCount === 1 ? 'fila' : 'filas'})` : `Retorno: ${subqueryReturnText(summary)}`;
-const parameterText = (summary) => summary.parameters?.length ? summary.parameters.map((param) => `${param.name} = ${formatSubqueryValue(param.value)}`).join(', ') : 'sin parámetro externo';
-
-function ParameterChips({ summary }) {
-  if (!summary.parameters?.length) return <span>Parámetro: sin referencia externa detectada</span>;
-  return <div className="subquery-keyline"><span>Llave de correlación</span>{summary.parameters.map((param) => <code className="external-key" key={param.name}>{param.name} = {formatSubqueryValue(param.value)}</code>)}</div>;
-}
-
-function ShortCircuitNote({ summary }) {
-  if (!/EXISTS/i.test(summary.operator || '')) return null;
-  return <div className="subquery-short-circuit"><b>Ciclo Corto de EXISTS</b><span>El motor se detiene apenas encuentra una fila interna que cumple la condición. No evalúa el contenido de esa fila: solo necesita saber si existe al menos una coincidencia.</span></div>;
-}
-
-function SubqueryCycleDetail({ summary }) {
-  if (summary.mode !== 'correlated') return null;
-  return <div className="subquery-cycle-detail"><div><b>Inyección de parámetro</b><ParameterChips summary={summary} /></div><div><b>Condición evaluada</b><span>{subqueryConditionText(summary)}</span></div><div><b>Veredicto del ciclo</b><span>{subqueryVerdictText(summary)}</span></div><ShortCircuitNote summary={summary} /></div>;
-}
-
-function SubqueryStepCard({ step, index }) {
-  return <div className="subquery-flow-item" key={`${step.subqueryTraceId || 'legacy'}-${step.type}-${index}`}>{index > 0 && <div className="flow-arrow"><span>↓</span><small>{step.type}</small></div>}<article className={`stage-card accent-${step.accent} subquery-card`}><header><div className="stage-number">{index + 1}</div><div><span className="clause-chip">{step.type}</span><h3>{step.title}</h3></div><strong>{step.count} {step.count === 1 ? 'fila' : 'filas'}</strong></header><p>{step.detail}</p><DataTable rows={step.rows} compact compare={step.compare} /><JoinKeyNote compare={step.type === 'JOIN' ? step.compare : null} /></article></div>;
-}
-
-function SubqueryBranch({ summary, steps, traced, compactHeader = false, hideCycleDetail = false }) {
-  const currentSteps = traced ? steps.filter((step) => step.subqueryTraceId === summary.id) : steps;
-  const correlated = summary.mode === 'correlated';
-  return <section className={`subquery-branch ${correlated ? 'correlated' : 'uncorrelated'} ${compactHeader ? 'carousel-slide' : ''}`}><div className="subquery-branch-head"><strong>{correlated ? `Iteración N${summary.iteration}` : 'Evaluación única'}</strong><span>{correlated ? 'subconsulta correlacionada' : 'subconsulta no correlacionada'}</span></div>{!hideCycleDetail && <SubqueryCycleDetail summary={summary} />}{currentSteps.map((sqStep, sqIndex) => <SubqueryStepCard step={sqStep} index={sqIndex} key={`${summary.id || 'legacy'}-${sqIndex}`} />)}{!hideCycleDetail && <div className="subquery-return"><span>Retorno a la condición</span><code>{subqueryReturnText(summary)}</code></div>}</section>;
-}
-
-function ExternalIterationTable({ rows = [], activeIndex, summary }) {
-  if (!rows.length) return null;
-  const columns = [...new Set(rows.flatMap((row) => Object.keys(row).filter((key) => !key.startsWith('__'))))].slice(0, 6);
-  const verdictClass = summary.verdict === 'TRUE' ? 'passes-true' : summary.verdict === 'FALSE' ? 'passes-false' : 'passes-unknown';
-  return <aside className="external-row-panel"><div className="external-row-head"><strong>Tabla externa</strong><span>Fila evaluada por WHERE/HAVING</span></div><div className="external-table-wrap"><table><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr className={index === activeIndex ? `current ${verdictClass}` : ''} key={index}>{columns.map((column) => <td key={column}>{row[column] == null ? <span className="null">NULL</span> : String(row[column])}</td>)}</tr>)}</tbody></table></div><p>La fila resaltada es la que inyecta su llave en la subconsulta. Verde pasa el filtro; rojo se descarta.</p></aside>;
-}
-
-function CorrelatedSubqueryCarousel({ summaries, steps, traced, externalRows }) {
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [showInternalTrace, setShowInternalTrace] = useState(false);
-  const total = summaries.length;
-  const index = Math.min(activeIndex, Math.max(total - 1, 0));
-  const summary = summaries[index];
-  if (!summary) return null;
-  return <div className="subquery-carousel"><div className="subquery-carousel-head"><button className="subquery-nav-button" disabled={index === 0} onClick={(event) => { event.stopPropagation(); setActiveIndex((value) => Math.max(value - 1, 0)); }} aria-label="Iteración anterior">←</button><div className="subquery-carousel-title"><strong>Iteración {index + 1} de {total}</strong><span>El motor ejecuta esta subconsulta por cada fila externa antes de avanzar al siguiente paso de la regla.</span></div><button className="subquery-nav-button" disabled={index === total - 1} onClick={(event) => { event.stopPropagation(); setActiveIndex((value) => Math.min(value + 1, total - 1)); }} aria-label="Iteración siguiente">→</button></div><div className="subquery-carousel-body"><div className="subquery-cycle-shell"><SubqueryCycleDetail summary={summary} /><div className="subquery-return"><span>Resultado del ciclo</span><code>{subqueryReturnText(summary)}</code></div><button className="subquery-trace-toggle" onClick={(event) => { event.stopPropagation(); setShowInternalTrace((value) => !value); }}>{showInternalTrace ? 'Ocultar ejecución interna' : 'Ver ejecución interna'}</button>{showInternalTrace && <SubqueryBranch summary={summary} steps={steps} traced={traced} compactHeader hideCycleDetail />}</div><ExternalIterationTable rows={externalRows} activeIndex={index} summary={summary} /></div><p className="subquery-carousel-note">Aunque navegues las iteraciones, conceptualmente el motor repite este ciclo fila externa → subconsulta → retorno → decisión antes de pasar a SELECT u ORDER BY.</p></div>;
-}
-
-function SubqueryQueryBlock({ group }) {
-  const query = group.summaries.find((summary) => summary.innerSql)?.innerSql;
-  if (!query) return null;
-  return <div className="subquery-query-block"><strong>Consulta interna</strong><code>{query}</code></div>;
-}
-
-function SubqueryGroupFlow({ group }) {
-  const correlatedSummaries = group.summaries.filter((summary) => summary.mode === 'correlated');
-  const plainSummaries = group.summaries.filter((summary) => summary.mode !== 'correlated');
-  return <div className="subquery-nested standalone"><div className="subquery-label">↳ Subconsulta</div><SubqueryQueryBlock group={group} />{correlatedSummaries.length ? <CorrelatedSubqueryCarousel summaries={correlatedSummaries} steps={group.steps} traced={group.traced} externalRows={group.externalRows} /> : plainSummaries.map((summary, summaryIndex) => <SubqueryBranch summary={summary} steps={group.steps} traced={group.traced} key={summary.id || summaryIndex} />)}</div>;
-}
-
-function SubqueryFlow({ compare, group }) {
-  const groups = group ? [group] : buildSubqueryGroups(compare);
-  if (!groups.length) return null;
-  return <>{groups.map((item) => <SubqueryGroupFlow group={item} key={item.key} />)}</>;
-}
-
-function SubqueryDependencyNote({ step }) {
-  if (!hasSubqueryTrace(step)) return null;
-  return <div className="subquery-parent-note"><strong>Condición con subconsulta</strong><code>{parentConditionText(step)}</code><p>La condición utiliza una subconsulta. En el siguiente paso se muestra cómo se obtiene su resultado.</p></div>;
-}
-
-function JourneyStepCard({ step, displayIndex, focused, highlighted, showArrow, onSelect }) {
-  const item = step.item;
-  if (step.kind === 'subquery') {
-    return <div className="flow-item" id={`visual-step-${step.id}`} key={step.id}>{showArrow && <div className="flow-arrow"><span>↓</span><small>{item.type}</small></div>}<article className={`stage-card accent-${item.accent} subquery-stage ${focused ? 'focused' : ''} ${highlighted ? 'jump-highlight' : ''}`} onClick={onSelect}><header><div className="stage-number">{displayIndex}</div><div><span className="clause-chip">{item.type}</span><h3>{item.title}</h3></div><strong>{item.count} {item.count === 1 ? 'ciclo' : 'ciclos'}</strong></header><p>{item.detail}</p><SubqueryFlow group={item.subqueryGroup} /></article></div>;
-  }
-  return <div className="flow-item" id={`visual-step-${step.id}`} key={step.id}>{showArrow && <div className="flow-arrow"><span>↓</span><small>{item.type}</small></div>}<article className={`stage-card accent-${item.accent} ${focused ? 'focused' : ''} ${highlighted ? 'jump-highlight' : ''}`} onClick={onSelect}><header><div className="stage-number">{displayIndex}</div><div><span className="clause-chip">{item.type}</span><h3>{item.title}</h3></div><strong>{item.count} {item.count === 1 ? 'fila' : 'filas'}</strong></header><p>{parentStepDetail(item)}</p><SubqueryDependencyNote step={item} /><DataTable rows={item.rows} compact compare={item.compare} /><JoinKeyNote compare={item.type === 'JOIN' ? item.compare : null} /></article></div>;
-}
-
-function Journey({ execution, visualSteps, activeStep, setActiveStep, showAll, setShowAll, stepMode, setStepMode, sql }) {
-  const [orderMode, setOrderMode] = useState('logical');
-  const [highlightedStep, setHighlightedStep] = useState(null);
-  const orderedSteps = useMemo(() => execution ? visualSteps.map((step, index) => ({ step, visualIndex: index })).sort((a, b) => orderMode === 'logical' ? a.visualIndex - b.visualIndex : (writtenOrderIndex(sql, a.step.parentStep, a.step.originalIndex) + a.step.orderOffset) - (writtenOrderIndex(sql, b.step.parentStep, b.step.originalIndex) + b.step.orderOffset)) : [], [execution, orderMode, sql, visualSteps]);
-  if (!execution) return <section className="welcome-state"><div className="welcome-graphic"><span>SELECT</span><i /><span>FROM</span><i /><span>WHERE</span></div><h2>Tu consulta se convertirá en un recorrido</h2><p>Elige un ejemplo o escribe SQL. Verás cómo cada cláusula transforma los datos.</p></section>;
-  const activeVisibleIndex = Math.max(orderedSteps.findIndex((entry) => entry.visualIndex === activeStep), 0);
-  const showAllSteps = showAll || orderMode === 'written';
-  const visible = showAllSteps ? orderedSteps : orderedSteps.slice(activeVisibleIndex, activeVisibleIndex + 1);
-  const navigateToStep = (step, visualIndex) => {
-    setActiveStep(visualIndex);
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-      const target = document.getElementById(`visual-step-${step.id}`);
-      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      window.setTimeout(() => {
-        setHighlightedStep(step.id);
-        window.setTimeout(() => setHighlightedStep((current) => current === step.id ? null : current), 1000);
-      }, target ? 350 : 0);
-    }));
-  };
-  return <section className="journey">
-    <div className="section-title journey-title"><div><span className="eyebrow">RECORRIDO DE LA CONSULTA</span><h2>{orderMode === 'logical' ? 'Orden lógico de ejecución' : 'Orden escrito'}</h2></div><div className="journey-tools"><div className="order-switch" role="group" aria-label="Tipo de orden"><button className={orderMode === 'logical' ? 'active' : ''} onClick={() => setOrderMode('logical')}>Orden lógico</button><button className={orderMode === 'written' ? 'active' : ''} onClick={() => { setOrderMode('written'); setStepMode(false); setShowAll(true); }}>Orden escrito</button></div><span className="result-badge">{execution.message}</span></div></div>
-    <div className="logical-order">{orderedSteps.map(({ step, visualIndex }, index) => <React.Fragment key={step.id}>{index > 0 && <i className="logical-order-arrow">→</i>}<button className={`${visualIndex === activeStep ? 'active' : index < activeVisibleIndex || showAllSteps ? 'done' : ''} ${step.kind === 'subquery' ? 'subquery-order-step' : ''}`} onClick={() => navigateToStep(step, visualIndex)}><span>{index + 1}</span>{step.item.type}</button></React.Fragment>)}</div>
-    <div className="flow">{visible.map(({ step, visualIndex }, index) => {
-      const displayIndex = showAllSteps ? index + 1 : activeVisibleIndex + 1;
-      return <JourneyStepCard step={step} displayIndex={displayIndex} focused={visualIndex === activeStep || showAllSteps} highlighted={highlightedStep === step.id} showArrow={showAllSteps && index > 0} onSelect={() => setActiveStep(visualIndex)} key={step.id} />;
-    })}</div>
-    {!showAll && orderMode === 'logical' && <div className="step-controls"><button disabled={activeVisibleIndex === 0} onClick={() => setActiveStep(orderedSteps[activeVisibleIndex - 1]?.visualIndex ?? activeStep)}>Anterior</button><span>Paso {activeVisibleIndex + 1} de {orderedSteps.length}: {orderedSteps[activeVisibleIndex]?.step.item.type}</span><button disabled={activeVisibleIndex === orderedSteps.length - 1} onClick={() => setActiveStep(orderedSteps[activeVisibleIndex + 1]?.visualIndex ?? activeStep)}>Siguiente</button></div>}
-  </section>;
-}
 
 function ExplainPanel({ visualSteps, activeStep, stepMode, open, onClose }) {
   const current = visualSteps[activeStep]?.item;
@@ -217,18 +67,27 @@ export default function App() {
   const [showAll, setShowAll] = useState(true);
   const [stepMode, setStepMode] = useState(false);
   const [error, setError] = useState('');
-  const [importMessage, setImportMessage] = useState('');
   const [history, setHistory] = useState([]);
   const [darkMode, setDarkMode] = useState(false);
   const timer = useRef();
   const databaseRef = useRef(database);
   const { schemaOpen, explainOpen, historyOpen, libraryOpen, overlayOpen, openSchema, openLibrary, openHistory, closeSchema, closeLibrary, closeHistory, closeOverlays, toggleExplain } = useOverlayState();
+  const importSqlFile = async (content, fileName) => {
+    clearInterval(timer.current);
+    if (!hasTerminatingSemicolon(content)) throw new Error('El archivo SQL debe finalizar cada sentencia con punto y coma (;).');
+    const next = executeSqlScript(content, databaseRef.current);
+    databaseRef.current = next.db; setDatabase(next.db); setExecution(null); setError(''); setActiveStep(0); setShowAll(true);
+    return `${fileName}: ${next.importedStatements} sentencias ejecutadas sobre la base local.`;
+  };
+  const { fileInputRef, importMessage, sqlFileAccept, clearImportMessage, openImportFileDialog, handleImportFileChange } = useSqlFileImport({ onImportSqlFile: importSqlFile, onError: setError });
 
-  useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); setImportMessage(''); } }, [selectedExample]);
+  useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); clearImportMessage(); } }, [selectedExample]);
   useEffect(() => { databaseRef.current = database; }, [database]);
   useEffect(() => () => clearInterval(timer.current), []);
   const visualSteps = useMemo(() => buildVisualSteps(execution), [execution]);
   useEffect(() => { if (activeStep >= visualSteps.length) setActiveStep(Math.max(visualSteps.length - 1, 0)); }, [activeStep, visualSteps.length]);
+  const changeSql = (value) => { setSql(value); setSelectedExample(''); };
+  const selectExample = (value) => { setSelectedExample(value); if (!value) { setSql(''); setError(''); clearImportMessage(); } };
   const createSandboxTable = (createSql) => {
     try {
       const result = executeSql(createSql, database);
@@ -253,25 +112,16 @@ export default function App() {
     try {
       if (!hasTerminatingSemicolon(sql)) throw new Error('La sentencia SQL debe finalizar con punto y coma (;).');
       const statements = splitSqlStatements(sql);
-      const next = statements.length > 1 ? executeSqlScript(sql, databaseRef.current) : executeSql(sql, databaseRef.current); databaseRef.current = next.db; setExecution(next); setDatabase(next.db); setError(''); setImportMessage(''); setActiveStep(0); setShowAll(!startStep); setStepMode(startStep);
+      const next = statements.length > 1 ? executeSqlScript(sql, databaseRef.current) : executeSql(sql, databaseRef.current); databaseRef.current = next.db; setExecution(next); setDatabase(next.db); setError(''); clearImportMessage(); setActiveStep(0); setShowAll(!startStep); setStepMode(startStep);
       setHistory((items) => [{ sql, time: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) }, ...items.filter((x) => x.sql !== sql)].slice(0, 8));
-    } catch (err) { setError(err.message); setImportMessage(''); setExecution(null); }
+    } catch (err) { setError(err.message); clearImportMessage(); setExecution(null); }
   };
   const toggleStepMode = () => {
     if (stepMode) { setStepMode(false); setShowAll(true); }
     else if (execution) { setStepMode(true); setShowAll(false); setActiveStep(0); }
     else { run(true); }
   };
-  const importSqlFile = async (content, fileName) => {
-    clearInterval(timer.current);
-    try {
-      if (!hasTerminatingSemicolon(content)) throw new Error('El archivo SQL debe finalizar cada sentencia con punto y coma (;).');
-      const next = executeSqlScript(content, databaseRef.current);
-      databaseRef.current = next.db; setDatabase(next.db); setExecution(null); setError(''); setActiveStep(0); setShowAll(true);
-      setImportMessage(`${fileName}: ${next.importedStatements} sentencias ejecutadas sobre la base local.`);
-    } catch (err) { setError(err.message); setImportMessage(''); }
-  };
-  const reset = () => { clearInterval(timer.current); const initial = createSeedDatabase(); databaseRef.current = initial; setDatabase(initial); setExecution(null); setError(''); setImportMessage(''); setActiveStep(0); setHistory([]); setSelectedExample(''); setSql(''); };
+  const clearEditorExecution = () => { clearInterval(timer.current); setSql(''); setSelectedExample(''); setExecution(null); setError(''); clearImportMessage(); setActiveStep(0); setShowAll(true); setStepMode(false); };
   const activeVisualStep = visualSteps[Math.min(activeStep, Math.max(visualSteps.length - 1, 0))]?.item;
   const activeResult = useMemo(() => activeVisualStep?.rows || [], [activeVisualStep]);
   const activeClause = activeVisualStep?.parentType || activeVisualStep?.type || '';
@@ -279,7 +129,7 @@ export default function App() {
 
   return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
     <header className="topbar"><a className="brand" href="#top"><span className="brand-mark"><Icon name="database" /></span><span>SQL <strong>Tutor</strong><small>Explorador Visual Consultas</small></span></a><nav><button className="nav-icon-button" onClick={openSchema} aria-label="Abrir base de datos" title="Base de datos"><Icon name="database" /></button><button className={`nav-icon-button ${explainOpen ? 'active' : ''}`} onClick={toggleExplain} aria-label="Ir a explicación" aria-pressed={explainOpen} title="Explicación"><Icon name="bulb" /></button><button className="nav-icon-button library-shortcut" onClick={openLibrary} aria-label="Abrir Biblioteca SQL" title="Biblioteca SQL"><Icon name="book" /></button><button className="library-text-button" onClick={openLibrary}><Icon name="book" /> Biblioteca SQL</button></nav><div className="header-actions"><button className="theme-toggle" onClick={() => setDarkMode((value) => !value)} aria-label={darkMode ? 'Activar modo claro' : 'Activar modo oscuro'} title={darkMode ? 'Modo claro' : 'Modo oscuro'}><Icon name={darkMode ? 'sun' : 'moon'} /></button><button className="theme-toggle header-history-button" onClick={openHistory} aria-label="Abrir historial" title="Historial"><Icon name="history" /></button><div className="session-pill"><span /> Sesión temporal</div></div></header>
-    <main id="top"><SchemaPanel database={database} open={schemaOpen} onClose={closeSchema} onCreateTable={createSandboxTable} onDeleteTable={deleteSandboxTable} /><div className="workspace-layout"><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, setError, setImportMessage, selectedExample, setSelectedExample, error, importMessage, stepMode }} activeClause={activeClause} onImportSqlFile={importSqlFile} onRun={() => run(false)} onStep={toggleStepMode} onReset={reset} /><ResultPanel execution={execution} /></div><div className={`execution-guide-layout ${explainOpen ? 'guide-open' : ''}`}><div className="execution-main-column"><div className="content-grid"><Journey {...{ execution, visualSteps, activeStep, setActiveStep, showAll, setShowAll, stepMode, setStepMode, sql }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div>{explainOpen && <ExplainPanel {...{ visualSteps, activeStep, stepMode }} open={explainOpen} onClose={toggleExplain} />}</div></div></div></main>
+    <main id="top"><SchemaPanel database={database} open={schemaOpen} onClose={closeSchema} onCreateTable={createSandboxTable} onDeleteTable={deleteSandboxTable} /><div className="workspace-layout"><div className="workspace"><div className="editor-container-split"><SqlEditor {...{ sql, examples, selectedExample, error, importMessage, activeClause, stepMode, fileInputRef, sqlFileAccept }} onSqlChange={changeSql} onExampleChange={selectExample} onImportFileChange={handleImportFileChange} onOpenImportFile={openImportFileDialog} onRun={() => run(false)} onStep={toggleStepMode} onReset={clearEditorExecution} /><ResultPanel execution={execution} /></div><div className={`execution-guide-layout ${explainOpen ? 'guide-open' : ''}`}><div className="execution-main-column"><div className="content-grid"><Journey {...{ execution, visualSteps, activeStep, setActiveStep, showAll, setShowAll, stepMode, setStepMode, sql }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div>{explainOpen && <ExplainPanel {...{ visualSteps, activeStep, stepMode }} open={explainOpen} onClose={toggleExplain} />}</div></div></div></main>
     <footer className="app-footer">
       <div className="footer-main"><span>Página realizada por <strong>Prieto Agustin</strong></span><span>Alumno UTNFRC</span><span className="footer-badge">Fase de Pruebas</span></div>
       <p className="footer-legal">Copyright © 2026 Prieto Agustin. Todos los derechos reservados. Uso educativo autorizado. Prohibida la copia, redistribución o explotación comercial sin permiso.</p>
