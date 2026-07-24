@@ -1,13 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { concepts } from './data/concepts';
 import { examples } from './data/examples';
 import { createSeedDatabase } from './data/seed';
 import { executeSql, executeSqlScript, splitSqlStatements } from './lib/sqlEngine';
+import { HistoryModal } from './components/history/HistoryModal';
 import { JoinKeyNote } from './components/journey/JoinKeyNote';
 import { ResultPanel } from './components/results/ResultPanel';
+import { Scrim } from './components/layout/Scrim';
+import { LibraryDrawer } from './components/library/LibraryDrawer';
 import { SchemaPanel } from './components/sandbox/SchemaPanel';
 import { DataTable } from './components/tables/DataTable';
 import { Icon } from './components/ui/Icon';
+import { useBodyScrollLock } from './hooks/useBodyScrollLock';
+import { useOverlayState } from './hooks/useOverlayState';
 import { hasSubqueryTrace, parentConditionText, parentStepDetail, formatSubqueryValue, subqueryConditionText, subqueryReturnText, buildSubqueryGroups } from './visual/subqueryVisual';
 import { SUBQUERY_STEP_TYPE, buildVisualSteps, writtenOrderIndex } from './visual/visualSteps';
 
@@ -194,20 +198,6 @@ function ExplainPanel({ visualSteps, activeStep, stepMode, open, onClose }) {
   </aside>;
 }
 
-function HistoryModal({ open, history, onClose, onSelect }) {
-  if (!open) return null;
-  return <div className="history-modal-layer" role="dialog" aria-modal="true" aria-label="Historial de consultas">
-    <div className="table-detail-modal history-modal">
-      <button className="detail-close-btn" onClick={onClose} aria-label="Cerrar historial"><Icon name="close" /></button>
-      <div className="detail-header">
-        <div><span className="eyebrow">HISTORIAL</span><h2><Icon name="history" /> Consultas recientes</h2></div>
-        <span className="result-badge">{history.length} {history.length === 1 ? 'consulta' : 'consultas'}</span>
-      </div>
-      <div className="history-list modal-history-list">{history.length ? history.map((item, i) => <button key={`${item.time}-${i}`} onClick={() => { onSelect(item.sql); onClose(); }}><code>{item.sql.replace(/\s+/g, ' ').slice(0, 120)}</code><span>{item.time}</span></button>) : <p className="muted">Todavía no ejecutaste consultas.</p>}</div>
-    </div>
-  </div>;
-}
-
 const explanationFor = (type) => ({ FROM: 'El motor localiza la fuente y crea el conjunto inicial.', JOIN: 'Compara la condición ON fila por fila y combina coincidencias.', WHERE: 'Evalúa la condición externa para cada fila; si depende de una subconsulta, su resultado se obtiene en el paso siguiente.', [SUBQUERY_STEP_TYPE]: 'Ejecuta la consulta interna y devuelve un valor, conjunto o veredicto que la cláusula externa usa para decidir qué filas continúan.', 'GROUP BY': 'Construye una colección por cada combinación única de claves.', HAVING: 'Evalúa agregados de cada grupo y descarta los que no cumplen.', SELECT: 'Calcula expresiones y proyecta únicamente las columnas pedidas.', DISTINCT: 'Elimina filas duplicadas del resultado ya proyectado.', 'ORDER BY': 'Compara valores y reordena el conjunto ya proyectado.', UNION: 'Combina dos resultados union-compatible y elimina duplicados.', INTERSECT: 'Conserva solo las filas que aparecen en ambos resultados.', EXCEPT: 'Conserva filas de la primera consulta que no aparecen en la segunda.', VALUES: 'Relaciona cada valor con su columna por posición.', SET: 'Asigna los nuevos valores en las filas seleccionadas.' }[type] || 'El motor valida la instrucción y aplica la transformación sobre el estado temporal.');
 const exampleFor = (type) => ({ FROM: 'FROM Products', SOURCE: 'LEFT JOIN Orders o ON ...', JOIN: 'INNER JOIN Orders o ON c.id = o.customer_id', WHERE: 'WHERE YEAR(order_date) = 2026', [SUBQUERY_STEP_TYPE]: 'SELECT ... FROM ... WHERE columna = valor_externo', 'GROUP BY': 'GROUP BY category_id', HAVING: 'HAVING COUNT(*) >= 2', SELECT: 'SELECT name, AVG(price)', DISTINCT: 'SELECT DISTINCT city', 'ORDER BY': 'ORDER BY price DESC', UNION: 'SELECT city FROM Customers UNION SELECT city FROM Stores', INTERSECT: 'SELECT Dni FROM Empleados INTERSECT SELECT Dni FROM Jefes', EXCEPT: 'SELECT Dni FROM Empleados EXCEPT SELECT Dni FROM Jefes', LIMIT: 'OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY', VALUES: "VALUES (4, 'Books')", SET: 'SET stock = stock + 1', INSERT: 'INSERT INTO Categories (...)', UPDATE: 'UPDATE Products SET ...', DELETE: 'DELETE FROM Orders WHERE ...', PARSE: 'CREATE TABLE Suppliers (...)' }[type] || `${type} ...`);
 const stepModeGuide = (step) => ({ FROM: 'Este paso muestra la tabla o conjunto inicial antes de aplicar filtros. Si faltan filas acá, el problema suele estar en el nombre de la tabla o en el origen elegido.', SOURCE: 'Este paso prepara la fuente de datos declarada en la sentencia. Revisá que la tabla exista y que sus columnas coincidan con las que vas a usar después.', JOIN: 'Este paso combina tablas. Si aparecen NULL o faltan filas, revisá la condición ON y que estés comparando las claves correctas.', WHERE: 'Este paso decide fila por fila qué registros continúan. Las filas marcadas como recortadas no cumplen la condición, por eso ya no llegan a SELECT, GROUP BY u ORDER BY.', 'GROUP BY': 'Este paso junta filas que comparten el mismo valor de agrupación. Si el resultado tiene menos filas que antes, no es un error: ahora cada fila representa un grupo.', HAVING: 'Este paso filtra grupos ya calculados. A diferencia de WHERE, acá sí se pueden usar agregados como COUNT, SUM o AVG.', SELECT: 'Este paso arma las columnas finales. Si una columna desaparece, es porque no fue seleccionada o quedó reemplazada por una expresión o alias.', DISTINCT: 'Este paso elimina filas repetidas después de resolver SELECT. Si baja la cantidad de filas, significa que había resultados idénticos.', 'ORDER BY': 'Este paso solo reordena el resultado. No debería cambiar la cantidad de filas; si cambia, el problema viene de una etapa anterior.', VALUES: 'Este paso toma los valores escritos y los ubica por posición en las columnas del INSERT.', SET: 'Este paso calcula los nuevos valores del UPDATE para las filas que pasaron el WHERE.', INSERT: 'Este paso inserta registros en la tabla destino respetando columnas, tipos y restricciones.', UPDATE: 'Este paso modifica únicamente las filas alcanzadas por el WHERE. Si se actualizan demasiadas, revisá el filtro.', DELETE: 'Este paso elimina únicamente las filas alcanzadas por el WHERE. Si se eliminan demasiadas, el filtro es demasiado amplio.' }[step.type] || 'En este paso el motor valida o transforma la sentencia. Compará las filas visibles con lo que esperabas obtener en esta etapa.');
@@ -217,12 +207,6 @@ const noteFor = (type) => type === 'LIMIT' ? 'SQL Server usa TOP o OFFSET ... FE
 const guideForStep = (step) => step.type === SUBQUERY_STEP_TYPE ? 'Este paso abre la consulta interna. Si es correlacionada, revisá cada iteración: la fila externa inyecta un valor y la subconsulta devuelve un resultado para esa fila.' : stepModeGuide(step);
 const debugHintForStep = (step) => step.type === SUBQUERY_STEP_TYPE ? 'El resultado de este paso no es la salida final: vuelve a la condición externa para decidir si cada fila continúa.' : step.compare?.subquerySteps?.length ? 'La condición depende del resultado de una subconsulta; avanzá al paso siguiente para ver cómo se obtiene.' : stepDebugHint(step);
 const noteForStep = (type) => type === SUBQUERY_STEP_TYPE ? 'Las subconsultas de esta cátedra se evalúan desde WHERE o HAVING; su resultado alimenta la condición principal.' : noteFor(type);
-
-function Library({ open, onClose }) {
-  const [search, setSearch] = useState('');
-  const filtered = concepts.filter((item) => `${item.term} ${item.text}`.toLowerCase().includes(search.toLowerCase()));
-  return <div id="biblioteca-sql" className={`library-drawer ${open ? 'open' : ''}`}><div className="drawer-head"><div><span className="eyebrow">BIBLIOTECA SQL</span><h2>Conceptos esenciales</h2></div><button className="icon-button" onClick={onClose}><Icon name="close" /></button></div><input className="search" placeholder="Buscar concepto..." value={search} onChange={(e) => setSearch(e.target.value)} /><div className="library-grid">{filtered.map((item) => <article key={item.term}><strong>{item.term}</strong><p>{item.text}</p></article>)}</div></div>;
-}
 
 export default function App() {
   const [database, setDatabase] = useState(createSeedDatabase);
@@ -235,13 +219,10 @@ export default function App() {
   const [error, setError] = useState('');
   const [importMessage, setImportMessage] = useState('');
   const [history, setHistory] = useState([]);
-  const [schemaOpen, setSchemaOpen] = useState(false);
-  const [explainOpen, setExplainOpen] = useState(true);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [libraryOpen, setLibraryOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const timer = useRef();
   const databaseRef = useRef(database);
+  const { schemaOpen, explainOpen, historyOpen, libraryOpen, overlayOpen, openSchema, openLibrary, openHistory, closeSchema, closeLibrary, closeHistory, closeOverlays, toggleExplain } = useOverlayState();
 
   useEffect(() => { const example = examples.find((item) => item.id === selectedExample); if (example) { setSql(example.sql); setError(''); setImportMessage(''); } }, [selectedExample]);
   useEffect(() => { databaseRef.current = database; }, [database]);
@@ -294,35 +275,17 @@ export default function App() {
   const activeVisualStep = visualSteps[Math.min(activeStep, Math.max(visualSteps.length - 1, 0))]?.item;
   const activeResult = useMemo(() => activeVisualStep?.rows || [], [activeVisualStep]);
   const activeClause = activeVisualStep?.parentType || activeVisualStep?.type || '';
-  const overlayOpen = schemaOpen || libraryOpen || historyOpen;
-  useEffect(() => {
-    document.body.classList.toggle('overlay-locked', overlayOpen);
-    return () => document.body.classList.remove('overlay-locked');
-  }, [overlayOpen]);
-  const closeOverlayWindows = () => { setSchemaOpen(false); setLibraryOpen(false); setHistoryOpen(false); };
-  const scrollToGuide = () => {
-    setExplainOpen((value) => {
-      const next = !value;
-      if (next) window.requestAnimationFrame(() => document.getElementById('guia-contextual')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-      return next;
-    });
-  };
-  const openOverlayWindow = (name) => {
-    setSchemaOpen(name === 'schema');
-    setLibraryOpen(name === 'library');
-    setHistoryOpen(name === 'history');
-    if (name === 'library') window.requestAnimationFrame(() => document.getElementById('biblioteca-sql')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
-  };
+  useBodyScrollLock(overlayOpen);
 
   return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
-    <header className="topbar"><a className="brand" href="#top"><span className="brand-mark"><Icon name="database" /></span><span>SQL <strong>Tutor</strong><small>Explorador Visual Consultas</small></span></a><nav><button className="nav-icon-button" onClick={() => openOverlayWindow('schema')} aria-label="Abrir base de datos" title="Base de datos"><Icon name="database" /></button><button className={`nav-icon-button ${explainOpen ? 'active' : ''}`} onClick={scrollToGuide} aria-label="Ir a explicación" aria-pressed={explainOpen} title="Explicación"><Icon name="bulb" /></button><button className="nav-icon-button library-shortcut" onClick={() => openOverlayWindow('library')} aria-label="Abrir Biblioteca SQL" title="Biblioteca SQL"><Icon name="book" /></button><button className="library-text-button" onClick={() => openOverlayWindow('library')}><Icon name="book" /> Biblioteca SQL</button></nav><div className="header-actions"><button className="theme-toggle" onClick={() => setDarkMode((value) => !value)} aria-label={darkMode ? 'Activar modo claro' : 'Activar modo oscuro'} title={darkMode ? 'Modo claro' : 'Modo oscuro'}><Icon name={darkMode ? 'sun' : 'moon'} /></button><button className="theme-toggle header-history-button" onClick={() => openOverlayWindow('history')} aria-label="Abrir historial" title="Historial"><Icon name="history" /></button><div className="session-pill"><span /> Sesión temporal</div></div></header>
-    <main id="top"><SchemaPanel database={database} open={schemaOpen} onClose={() => setSchemaOpen(false)} onCreateTable={createSandboxTable} onDeleteTable={deleteSandboxTable} /><div className="workspace-layout"><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, setError, setImportMessage, selectedExample, setSelectedExample, error, importMessage, stepMode }} activeClause={activeClause} onImportSqlFile={importSqlFile} onRun={() => run(false)} onStep={toggleStepMode} onReset={reset} /><ResultPanel execution={execution} /></div><div className={`execution-guide-layout ${explainOpen ? 'guide-open' : ''}`}><div className="execution-main-column"><div className="content-grid"><Journey {...{ execution, visualSteps, activeStep, setActiveStep, showAll, setShowAll, stepMode, setStepMode, sql }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div>{explainOpen && <ExplainPanel {...{ visualSteps, activeStep, stepMode }} open={explainOpen} onClose={() => setExplainOpen(false)} />}</div></div></div></main>
+    <header className="topbar"><a className="brand" href="#top"><span className="brand-mark"><Icon name="database" /></span><span>SQL <strong>Tutor</strong><small>Explorador Visual Consultas</small></span></a><nav><button className="nav-icon-button" onClick={openSchema} aria-label="Abrir base de datos" title="Base de datos"><Icon name="database" /></button><button className={`nav-icon-button ${explainOpen ? 'active' : ''}`} onClick={toggleExplain} aria-label="Ir a explicación" aria-pressed={explainOpen} title="Explicación"><Icon name="bulb" /></button><button className="nav-icon-button library-shortcut" onClick={openLibrary} aria-label="Abrir Biblioteca SQL" title="Biblioteca SQL"><Icon name="book" /></button><button className="library-text-button" onClick={openLibrary}><Icon name="book" /> Biblioteca SQL</button></nav><div className="header-actions"><button className="theme-toggle" onClick={() => setDarkMode((value) => !value)} aria-label={darkMode ? 'Activar modo claro' : 'Activar modo oscuro'} title={darkMode ? 'Modo claro' : 'Modo oscuro'}><Icon name={darkMode ? 'sun' : 'moon'} /></button><button className="theme-toggle header-history-button" onClick={openHistory} aria-label="Abrir historial" title="Historial"><Icon name="history" /></button><div className="session-pill"><span /> Sesión temporal</div></div></header>
+    <main id="top"><SchemaPanel database={database} open={schemaOpen} onClose={closeSchema} onCreateTable={createSandboxTable} onDeleteTable={deleteSandboxTable} /><div className="workspace-layout"><div className="workspace"><div className="editor-container-split"><Editor {...{ sql, setSql, setError, setImportMessage, selectedExample, setSelectedExample, error, importMessage, stepMode }} activeClause={activeClause} onImportSqlFile={importSqlFile} onRun={() => run(false)} onStep={toggleStepMode} onReset={reset} /><ResultPanel execution={execution} /></div><div className={`execution-guide-layout ${explainOpen ? 'guide-open' : ''}`}><div className="execution-main-column"><div className="content-grid"><Journey {...{ execution, visualSteps, activeStep, setActiveStep, showAll, setShowAll, stepMode, setStepMode, sql }} /></div>{execution && <section className="final-result"><div className="section-title"><div><span className="eyebrow">SALIDA</span><h2>Resultado {showAll ? 'final' : 'de la etapa'}</h2></div><span>{showAll ? execution.result.length : activeResult.length} filas</span></div><DataTable rows={showAll ? execution.result : activeResult} /></section>}</div>{explainOpen && <ExplainPanel {...{ visualSteps, activeStep, stepMode }} open={explainOpen} onClose={toggleExplain} />}</div></div></div></main>
     <footer className="app-footer">
       <div className="footer-main"><span>Página realizada por <strong>Prieto Agustin</strong></span><span>Alumno UTNFRC</span><span className="footer-badge">Fase de Pruebas</span></div>
       <p className="footer-legal">Copyright © 2026 Prieto Agustin. Todos los derechos reservados. Uso educativo autorizado. Prohibida la copia, redistribución o explotación comercial sin permiso.</p>
     </footer>
-    {overlayOpen && <button className="scrim" onClick={closeOverlayWindows} aria-label="Cerrar ventana" />}
-    <Library open={libraryOpen} onClose={() => setLibraryOpen(false)} />
-    <HistoryModal open={historyOpen} history={history} onClose={() => setHistoryOpen(false)} onSelect={(value) => setSql(value)} />
+    {overlayOpen && <Scrim onClick={closeOverlays} />}
+    <LibraryDrawer open={libraryOpen} onClose={closeLibrary} />
+    <HistoryModal open={historyOpen} history={history} onClose={closeHistory} onSelect={(value) => setSql(value)} />
   </div>;
 }
