@@ -1,8 +1,9 @@
 import React from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import App from './App';
+import { SQL_IMPORT_MAX_BYTES } from './services/sqlImportService';
 
 const runSql = async (user, sql) => {
   await user.type(screen.getByLabelText(/consulta sql/i), sql);
@@ -11,6 +12,19 @@ const runSql = async (user, sql) => {
 
 const expectFocus = async (element) => {
   await waitFor(() => expect(document.activeElement).toBe(element));
+};
+
+const importInput = (container) => {
+  const input = container.querySelector('input[type="file"]');
+  expect(input).toBeTruthy();
+  return input;
+};
+
+const sqlFile = ({ name = 'import.sql', content = '', size, text } = {}) => {
+  const file = new File([content], name, { type: 'text/plain' });
+  if (size != null) Object.defineProperty(file, 'size', { value: size });
+  if (text) Object.defineProperty(file, 'text', { value: text });
+  return file;
 };
 
 describe('App SQL flows', () => {
@@ -140,5 +154,94 @@ describe('App SQL flows', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /Base de datos del sandbox/i })).toBeNull());
     await expectFocus(schemaButton);
+  });
+
+  test('imports a valid SQL file and applies it to the temporary database', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const text = vi.fn().mockResolvedValue("INSERT INTO Categories (category_id, name) VALUES (4, 'Books');");
+    const input = importInput(container);
+
+    await user.upload(input, sqlFile({ name: 'categories.sql', text }));
+
+    expect(await screen.findByText(/categories.sql: 1 sentencias ejecutadas/i)).toBeTruthy();
+    expect(text).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe('');
+
+    await runSql(user, 'SELECT name FROM Categories WHERE category_id = 4;');
+
+    expect((await screen.findAllByText('Books')).length).toBeGreaterThan(0);
+  });
+
+  test('rejects an oversized SQL file before reading it', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const text = vi.fn().mockResolvedValue('SELECT 1;');
+    const input = importInput(container);
+
+    await user.upload(input, sqlFile({ name: 'large.sql', size: SQL_IMPORT_MAX_BYTES + 1, text }));
+
+    expect(await screen.findByText(/archivo SQL es demasiado grande/i)).toBeTruthy();
+    expect(screen.getByText(/1 MB/i)).toBeTruthy();
+    expect(text).not.toHaveBeenCalled();
+    expect(input.value).toBe('');
+  });
+
+  test('rejects an empty SQL file without executing it', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const text = vi.fn().mockResolvedValue(' \n\t ');
+    const input = importInput(container);
+
+    await user.upload(input, sqlFile({ name: 'empty.sql', text }));
+
+    expect(await screen.findByText(/archivo SQL esta vacio/i)).toBeTruthy();
+    expect(screen.queryByText(/Archivo SQL importado/i)).toBeNull();
+    expect(text).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe('');
+  });
+
+  test('shows a readable message when the imported file cannot be read', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const text = vi.fn().mockRejectedValue(new Error('disk failure'));
+    const input = importInput(container);
+
+    await user.upload(input, sqlFile({ name: 'broken.sql', text }));
+
+    expect(await screen.findByText(/No se pudo leer el archivo SQL/i)).toBeTruthy();
+    expect(screen.queryByText(/disk failure/i)).toBeNull();
+    expect(text).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe('');
+  });
+
+  test('keeps SQL execution errors separate from file read errors', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const text = vi.fn().mockResolvedValue('SELECT first_name FROM Customers');
+    const input = importInput(container);
+
+    await user.upload(input, sqlFile({ name: 'invalid.sql', text }));
+
+    expect(await screen.findByText(/El archivo SQL debe finalizar cada sentencia con punto y coma/i)).toBeTruthy();
+    expect(screen.queryByText(/No se pudo leer el archivo SQL/i)).toBeNull();
+    expect(input.value).toBe('');
+  });
+
+  test('allows selecting the same imported file again after each attempt', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const text = vi.fn().mockResolvedValue('SELECT first_name FROM Customers WHERE customer_id = 1;');
+    const file = sqlFile({ name: 'same.sql', text });
+    const input = importInput(container);
+
+    await user.upload(input, file);
+    expect(await screen.findByText(/same.sql: 1 sentencias ejecutadas/i)).toBeTruthy();
+    expect(input.value).toBe('');
+
+    await user.upload(input, file);
+
+    await waitFor(() => expect(text).toHaveBeenCalledTimes(2));
+    expect(input.value).toBe('');
   });
 });

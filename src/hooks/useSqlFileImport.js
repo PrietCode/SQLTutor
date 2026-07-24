@@ -1,7 +1,5 @@
 import { useRef, useState } from 'react';
-import { SQL_IMPORT_FILE_ACCEPT, isSqlImportFile, prepareImportedSql } from '../services/sqlImportService';
-
-const invalidFileMessage = 'Solo se pueden importar archivos .sql o .txt con instrucciones SQL.';
+import { SQL_IMPORT_FILE_ACCEPT, SQL_IMPORT_MESSAGES, prepareImportedSql, validateSqlImportFile } from '../services/sqlImportService';
 
 export function useSqlFileImport({ onImportSqlFile, onError }) {
   const [importMessage, setImportMessage] = useState('');
@@ -12,15 +10,16 @@ export function useSqlFileImport({ onImportSqlFile, onError }) {
 
   const handleImportFileChange = async (event) => {
     const file = event.target.files?.[0];
-    if (!file) return;
-    if (!isSqlImportFile(file.name)) {
-      onError(invalidFileMessage);
-      clearImportMessage();
-      event.target.value = '';
-      return;
-    }
+    if (!file) { event.target.value = ''; return; }
     try {
-      const content = prepareImportedSql(await file.text());
+      validateSqlImportFile(file);
+      let rawContent = '';
+      try {
+        rawContent = await file.text();
+      } catch {
+        throw new Error(SQL_IMPORT_MESSAGES.readError);
+      }
+      const content = prepareImportedSql(rawContent);
       const message = await onImportSqlFile(content, file.name);
       setImportMessage(message || '');
     } catch (err) {

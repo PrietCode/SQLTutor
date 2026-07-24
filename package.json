@@ -8,8 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:engine": "node --test src/lib/sqlEngine.test.js",
+    "test:service": "node --test src/services/sqlImportService.test.js",
     "test:ui": "vitest run",
-    "test": "npm run test:engine && npm run test:ui"
+    "test": "npm run test:engine && npm run test:service && npm run test:ui"
   },
   "dependencies": {
     "react": "18.3.1",
