@@ -3,6 +3,8 @@ import { concepts } from './data/concepts';
 import { examples } from './data/examples';
 import { createSeedDatabase } from './data/seed';
 import { executeSql, executeSqlScript, splitSqlStatements } from './lib/sqlEngine';
+import { hasSubqueryTrace, parentConditionText, parentStepDetail, formatSubqueryValue, subqueryConditionText, subqueryReturnText, buildSubqueryGroups } from './visual/subqueryVisual';
+import { SUBQUERY_STEP_TYPE, buildVisualSteps, writtenOrderIndex } from './visual/visualSteps';
 
 const hasTerminatingSemicolon = (input) => {
   let quoted = false; let lineComment = false; let blockComment = false; let last = '';
@@ -313,143 +315,6 @@ function ResultPanel({ execution }) {
   </section>;
 }
 
-const writtenOrderIndex = (sql, step, index) => {
-  const upper = sql.toUpperCase();
-  const type = step.type === 'SOURCE' ? 'FROM' : step.type;
-  const patterns = {
-    SELECT: /\bSELECT\b/,
-    FROM: /\bFROM\b/,
-    SOURCE: /\bJOIN\b/,
-    JOIN: /\b(?:INNER|LEFT|RIGHT|FULL)?\s*JOIN\b/,
-    WHERE: /\bWHERE\b/,
-    'GROUP BY': /\bGROUP\s+BY\b/,
-    HAVING: /\bHAVING\b/,
-    'ORDER BY': /\bORDER\s+BY\b/,
-    UNION: /\bUNION\b/,
-    INTERSECT: /\bINTERSECT\b/,
-    EXCEPT: /\bEXCEPT\b|\bMINUS\b/,
-    LIMIT: /\b(?:LIMIT|OFFSET|FETCH|TOP)\b/,
-    VALUES: /\bVALUES\b/,
-    SET: /\bSET\b/,
-    INSERT: /\bINSERT\b/,
-    UPDATE: /\bUPDATE\b/,
-    DELETE: /\bDELETE\b/,
-    TARGET: /\b(?:INTO|UPDATE|FROM)\b/,
-    PARSE: /\b(?:CREATE|ALTER|DROP|TRUNCATE)\b/
-  };
-  const match = upper.match(patterns[step.type] || patterns[type] || new RegExp(`\\b${type.replace(/\s+/g, '\\s+')}\\b`));
-  return (match ? match.index : index * 1000) + index / 100;
-};
-
-const SUBQUERY_STEP_TYPE = '↳ SUBCONSULTA';
-const hasSubqueryTrace = (step) => Boolean(step?.compare?.subquerySteps?.length);
-const subqueryGroupKey = (summary, index) => summary.mode === 'correlated'
-  ? `correlated|${summary.operator}|${summary.innerSql || summary.innerCondition || ''}`
-  : `plain|${summary.id ?? index}`;
-
-function buildSubqueryGroups(compare) {
-  const steps = compare?.subquerySteps || [];
-  if (!steps.length) return [];
-  const summaries = compare.subqueryResults?.length ? compare.subqueryResults : [{ id: 'legacy', mode: 'uncorrelated', operator: 'SUBCONSULTA', rowCount: steps.at(-1)?.count || 0, values: [] }];
-  const traced = steps.some((step) => step.subqueryTraceId != null);
-  const groups = [];
-  const byKey = new Map();
-  summaries.forEach((summary, index) => {
-    const key = subqueryGroupKey(summary, index);
-    if (!byKey.has(key)) {
-      const group = { key, summaries: [], steps, traced, externalRows: compare.beforeRows || [], mode: summary.mode, order: groups.length };
-      byKey.set(key, group);
-      groups.push(group);
-    }
-    byKey.get(key).summaries.push(summary);
-  });
-  return groups;
-}
-
-function subqueryRows(group) {
-  const firstSummary = group.summaries[0];
-  const matchingSteps = group.traced && firstSummary?.id != null ? group.steps.filter((step) => step.subqueryTraceId === firstSummary.id) : group.steps;
-  return matchingSteps.at(-1)?.rows || [];
-}
-
-function subqueryStepTitle(parentStep, group, index, total) {
-  const suffix = total > 1 ? ` ${index + 1}` : '';
-  return group.mode === 'correlated' ? `Subconsulta correlacionada${suffix} de ${parentStep.type}` : `Subconsulta${suffix} de ${parentStep.type}`;
-}
-
-function buildVisualSteps(execution) {
-  if (!execution) return [];
-  return execution.steps.flatMap((item, originalIndex) => {
-    const mainStep = { id: `main-${originalIndex}`, kind: 'main', item, parentStep: item, originalIndex, orderOffset: 0 };
-    const groups = buildSubqueryGroups(item.compare);
-    return [mainStep, ...groups.map((group, groupIndex) => {
-      const rows = subqueryRows(group);
-      return {
-        id: `subquery-${originalIndex}-${groupIndex}`,
-        kind: 'subquery',
-        originalIndex,
-        parentStep: item,
-        orderOffset: (groupIndex + 1) / 100,
-        item: {
-          type: SUBQUERY_STEP_TYPE,
-          title: subqueryStepTitle(item, group, groupIndex, groups.length),
-          detail: group.mode === 'correlated' ? 'La subconsulta se ejecuta una vez por cada fila externa. Usá las iteraciones para ver qué valor se inyecta y qué devuelve cada ciclo.' : 'La subconsulta se ejecuta como recorrido interno y su resultado vuelve a la condición externa.',
-          rows,
-          count: group.mode === 'correlated' ? group.summaries.length : rows.length,
-          accent: 'amber',
-          parentType: item.type,
-          subqueryGroup: group,
-          parentStep: item
-        }
-      };
-    })];
-  });
-}
-
-function hideSubquerySql(condition) {
-  let output = '';
-  for (let index = 0; index < condition.length; index += 1) {
-    const char = condition[index];
-    if (char === "'") {
-      let end = index + 1;
-      while (end < condition.length) {
-        if (condition[end] === "'" && condition[end + 1] === "'") { end += 2; continue; }
-        if (condition[end] === "'") { end += 1; break; }
-        end += 1;
-      }
-      output += condition.slice(index, end);
-      index = end - 1;
-      continue;
-    }
-    if (char === '(' && /^\s*SELECT\b/i.test(condition.slice(index + 1))) {
-      let depth = 0; let quoted = false; let end = index;
-      for (; end < condition.length; end += 1) {
-        const current = condition[end];
-        if (current === "'" && condition[end + 1] === "'") { end += 1; continue; }
-        if (current === "'") { quoted = !quoted; continue; }
-        if (quoted) continue;
-        if (current === '(') depth += 1;
-        if (current === ')') {
-          depth -= 1;
-          if (depth === 0) break;
-        }
-      }
-      output += '(resultado de la subconsulta)';
-      index = end;
-      continue;
-    }
-    output += char;
-  }
-  return output;
-}
-
-const parentConditionText = (step) => hideSubquerySql((step.detail || '').split(/\.\s+Se conservan/i)[0]);
-const parentStepDetail = (step) => {
-  if (!hasSubqueryTrace(step)) return step.detail;
-  const countText = (step.detail || '').match(/Se conservan[\s\S]*$/i)?.[0] || '';
-  return `${parentConditionText(step)}. ${countText}`.trim();
-};
-
 function JoinKeyNote({ compare }) {
   const keys = compare?.joinKeys || [];
   if (!keys.length) return null;
@@ -457,26 +322,6 @@ function JoinKeyNote({ compare }) {
   return <div className="join-note"><strong>Punto de unión</strong><p>FROM arma primero el producto cartesiano candidato; ON conserva solo los pares donde {pairs} cumplen la relación PK = FK.</p>{compare.outerVirtualRows?.length > 0 && <p>Como es un OUTER JOIN, las filas sin pareja no se pierden: se completa el lado faltante con <code>NULL</code>.</p>}{compare.selectAll && <p>Con <code>SELECT *</code> ambas columnas pertenecen a tablas distintas aunque tengan el mismo valor; si hay ambigüedad, cualificalas como <code>{keys[0].left}</code>.</p>}</div>;
 }
 
-const formatSubqueryValue = (value) => value == null ? 'NULL' : typeof value === 'string' ? `'${value}'` : String(value);
-const conditionWithValues = (summary, condition) => {
-  if (!summary.conditionValues?.length) return condition;
-  const values = new Map(summary.conditionValues.map((item) => [item.name.toLowerCase(), item.value]));
-  return condition.replace(/\b[A-Za-z_]\w*\.[A-Za-z_]\w*\b/g, (identifier) => values.has(identifier.toLowerCase()) ? `${identifier} (${formatSubqueryValue(values.get(identifier.toLowerCase()))})` : identifier);
-};
-const subqueryReturnText = (summary) => {
-  if (/EXISTS/i.test(summary.operator || '')) return `${summary.operator}: ${summary.verdict || (summary.rowCount > 0 ? 'TRUE' : 'FALSE')} (${summary.rowCount} filas)`;
-  if (!summary.values?.length) return 'conjunto vacío';
-  const values = summary.values.map(formatSubqueryValue).join(', ');
-  return summary.rowCount === 1 ? `valor ${values}` : `conjunto { ${values}${summary.rowCount > summary.values.length ? ', ...' : ''} }`;
-};
-const subqueryConditionText = (summary) => {
-  const inner = summary.innerCondition || 'la condición interna';
-  const annotatedInner = conditionWithValues(summary, inner);
-  if (/EXISTS/i.test(summary.operator || '')) return `¿Existe alguna fila que cumpla ${annotatedInner}?`;
-  if (/ANY|SOME|ALL/i.test(summary.operator || '')) return `Se compara el valor externo contra el conjunto devuelto por la subconsulta usando ${summary.operator}.`;
-  if (/IN/i.test(summary.operator || '')) return `Se verifica pertenencia contra la columna devuelta por la subconsulta.`;
-  return `Se evalúa ${summary.evaluatedCondition || annotatedInner}.`;
-};
 const subqueryVerdictText = (summary) => summary.verdict ? `Resultado: ${summary.verdict} (${summary.rowCount} ${summary.rowCount === 1 ? 'fila' : 'filas'})` : `Retorno: ${subqueryReturnText(summary)}`;
 const parameterText = (summary) => summary.parameters?.length ? summary.parameters.map((param) => `${param.name} = ${formatSubqueryValue(param.value)}`).join(', ') : 'sin parámetro externo';
 
