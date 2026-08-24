@@ -1,0 +1,57 @@
+.comparison-legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.legend-dot.removed {
+  background: #f6a5ad;
+}
+.legend-dot.added {
+  background: #5fd58e;
+}
+.step-controls {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.step-controls span {
+  color: #7e879a;
+  font-size: 10px;
+}
+.step-controls button {
+  border: 1px solid #d9dfe9;
+  background: white;
+  color: #536079;
+}
+.step-controls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.step-insight {
+  margin: 14px 0;
+  padding: 12px;
+  color: #294f92;
+  background: #eef5ff;
+  border: 1px solid #cfe0ff;
+  border-left: 3px solid #3975f6;
+  border-radius: 9px;
+}
+.step-insight strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 10px;
+}
+.step-insight p {
+  margin: 6px 0 0;
+  color: #42608f;
+  font-size: 10px;
+  line-height: 1.55;
+}

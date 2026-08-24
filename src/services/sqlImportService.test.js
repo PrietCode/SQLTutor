@@ -5,7 +5,7 @@ import {
   isSqlImportFile,
   normalizeImportedSql,
   prepareImportedSql,
-  validateSqlImportFile
+  validateSqlImportFile,
 } from './sqlImportService.js';
 
 const file = (name, size = 0) => ({ name, size });
@@ -43,7 +43,10 @@ test('accepts a file size within the import limit', () => {
 });
 
 test('rejects a file size above the import limit', () => {
-  assert.throws(() => validateSqlImportFile(file('archivo.sql', SQL_IMPORT_MAX_BYTES + 1)), /demasiado grande/);
+  assert.throws(
+    () => validateSqlImportFile(file('archivo.sql', SQL_IMPORT_MAX_BYTES + 1)),
+    /demasiado grande/
+  );
 });
 
 test('prepares normal SQL content without changing it', () => {

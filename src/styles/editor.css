@@ -1,0 +1,219 @@
+.editor-card,
+.final-result {
+  background: var(--panel);
+  border: 1px solid #dfe4ed;
+  border-radius: 14px;
+  box-shadow: 0 7px 24px #1c315b0a;
+  overflow: hidden;
+}
+.editor-toolbar {
+  height: 52px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fbfcfe;
+  border-bottom: 1px solid #e8ebf1;
+}
+.editor-toolbar > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+}
+.dialect {
+  color: #7c87a0;
+  background: #eef1f6;
+  padding: 4px 7px;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 600;
+}
+.editor-toolbar-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.import-file-button {
+  min-height: 31px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #cfd8e8;
+  color: #40506e;
+  background: white;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  transition: 0.18s ease;
+}
+.import-file-button:hover {
+  color: #2f66dd;
+  border-color: #8eabeb;
+  background: #f2f6ff;
+  transform: translateY(-1px);
+}
+.example-picker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.example-picker label {
+  color: #838ca0;
+  font-size: 11px;
+}
+.example-picker select {
+  color: #48536b;
+  border: 1px solid #dde3ed;
+  background: white;
+  border-radius: 7px;
+  padding: 6px 28px 6px 9px;
+  font-size: 11px;
+  outline: none;
+}
+.code-editor {
+  min-height: 154px;
+  display: grid;
+  grid-template-columns: 43px 1fr;
+  background: #11182a;
+  color: #d9e2f3;
+}
+.line-numbers {
+  padding: 16px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  color: #556078;
+  background: #0d1423;
+  border-right: 1px solid #263048;
+  font:
+    11px/24px 'JetBrains Mono',
+    monospace;
+  user-select: none;
+}
+.code-editor textarea {
+  width: 100%;
+  min-height: 154px;
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  padding: 16px;
+  color: #e7ecf7;
+  caret-color: #73a4ff;
+  background: transparent;
+  font:
+    500 12px/24px 'JetBrains Mono',
+    monospace;
+  tab-size: 2;
+}
+.query-tracker {
+  min-height: 34px;
+  padding: 7px 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: #8690a5;
+  background: #151e32;
+  border-top: 1px solid #263048;
+  font:
+    600 8px ui-monospace,
+    Consolas,
+    monospace;
+}
+.query-tracker mark {
+  padding: 3px 6px;
+  color: #9facbf;
+  background: #222d45;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  transition: 0.2s ease;
+}
+.query-tracker mark.active {
+  color: #fff;
+  background: #3975f6;
+  border-color: #79a0ff;
+  box-shadow: 0 0 0 3px #3975f633;
+}
+.error-message {
+  padding: 9px 15px;
+  color: #a33c4a;
+  background: #fff0f2;
+  border-top: 1px solid #ffd8de;
+  font-size: 11px;
+}
+.success-message {
+  padding: 9px 15px;
+  color: #24734d;
+  background: #ebfbf2;
+  border-top: 1px solid #cdf2dd;
+  font-size: 11px;
+}
+.editor-footer {
+  padding: 10px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fbfcfe;
+  border-top: 1px solid #e8ebf1;
+}
+.shortcut {
+  color: #959dae;
+  font-size: 10px;
+}
+.shortcut kbd {
+  color: #647089;
+  background: white;
+  border: 1px solid #dce1e9;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 9px;
+}
+.actions {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.actions button,
+.step-controls button {
+  min-height: 34px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 7px;
+  font-weight: 650;
+  font-size: 11px;
+  transition: 0.18s ease;
+}
+.ghost-button {
+  border: 0;
+  color: #69748b;
+  background: transparent;
+}
+.ghost-button:hover {
+  background: #eef1f6;
+}
+.secondary-button {
+  border: 1px solid #cfd8e8;
+  color: #40506e;
+  background: white;
+}
+.secondary-button:hover {
+  border-color: #8eabeb;
+}
+.primary-button {
+  border: 1px solid #326ae7;
+  color: white;
+  background: linear-gradient(135deg, #3978f7, #5b58dc);
+  box-shadow: 0 5px 12px #3973ee38;
+}
+.primary-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 7px 16px #3973ee48;
+}

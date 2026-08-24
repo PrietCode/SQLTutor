@@ -20,13 +20,21 @@ const replaceSqlAndRun = async (user, sql) => {
 const openSandbox = async (user) => {
   const schemaButton = screen.getByRole('button', { name: /Abrir base de datos/i });
   await user.click(schemaButton);
-  return { schemaButton, schemaDialog: await screen.findByRole('dialog', { name: /Base de datos del sandbox/i }) };
+  return {
+    schemaButton,
+    schemaDialog: await screen.findByRole('dialog', { name: /Base de datos del sandbox/i }),
+  };
 };
 
 const openRestoreDialog = async (user, schemaDialog) => {
-  const restoreButton = within(schemaDialog).getByRole('button', { name: /Restaurar base de ejemplo/i });
+  const restoreButton = within(schemaDialog).getByRole('button', {
+    name: /Restaurar base de ejemplo/i,
+  });
   await user.click(restoreButton);
-  return { restoreButton, restoreDialog: await screen.findByRole('dialog', { name: /Restaurar base de ejemplo/i }) };
+  return {
+    restoreButton,
+    restoreDialog: await screen.findByRole('dialog', { name: /Restaurar base de ejemplo/i }),
+  };
 };
 
 const expectFocus = async (element) => {
@@ -71,7 +79,9 @@ describe('App SQL flows', () => {
 
     await runSql(user, 'SELECT first_name FROM Customers');
 
-    expect(await screen.findByText(/La sentencia SQL debe finalizar con punto y coma/i)).toBeTruthy();
+    expect(
+      await screen.findByText(/La sentencia SQL debe finalizar con punto y coma/i)
+    ).toBeTruthy();
   });
 
   test('reset clears editor and execution without restoring the temporary database', async () => {
@@ -120,7 +130,9 @@ describe('App SQL flows', () => {
 
     await user.keyboard('{Escape}');
 
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Historial de consultas/i })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Historial de consultas/i })).toBeNull()
+    );
     await expectFocus(historyButton);
   });
 
@@ -141,7 +153,9 @@ describe('App SQL flows', () => {
 
     await user.keyboard('{Escape}');
 
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Biblioteca SQL/i })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Biblioteca SQL/i })).toBeNull()
+    );
     await expectFocus(libraryButton);
   });
 
@@ -153,10 +167,14 @@ describe('App SQL flows', () => {
     await user.click(schemaButton);
 
     const schemaDialog = await screen.findByRole('dialog', { name: /Base de datos del sandbox/i });
-    const schemaCloseButton = within(schemaDialog).getByRole('button', { name: /Cerrar base de datos/i });
+    const schemaCloseButton = within(schemaDialog).getByRole('button', {
+      name: /Cerrar base de datos/i,
+    });
     await expectFocus(schemaCloseButton);
 
-    const customersButton = within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla Customers/i });
+    const customersButton = within(schemaDialog).getByRole('button', {
+      name: /Ver detalle de tabla Customers/i,
+    });
     await user.click(customersButton);
 
     const detailDialog = await screen.findByRole('dialog', { name: /Detalle de tabla Customers/i });
@@ -165,13 +183,17 @@ describe('App SQL flows', () => {
 
     await user.keyboard('{Escape}');
 
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Detalle de tabla Customers/i })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Detalle de tabla Customers/i })).toBeNull()
+    );
     expect(screen.getByRole('dialog', { name: /Base de datos del sandbox/i })).toBeTruthy();
     await expectFocus(customersButton);
 
     await user.keyboard('{Escape}');
 
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Base de datos del sandbox/i })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Base de datos del sandbox/i })).toBeNull()
+    );
     await expectFocus(schemaButton);
   });
 
@@ -193,13 +215,23 @@ describe('App SQL flows', () => {
 
     await replaceSqlAndRun(user, 'CREATE TABLE TemporaryRestoreCancel (id INT PRIMARY KEY);');
     const { schemaDialog } = await openSandbox(user);
-    expect(within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla TemporaryRestoreCancel/i })).toBeTruthy();
+    expect(
+      within(schemaDialog).getByRole('button', {
+        name: /Ver detalle de tabla TemporaryRestoreCancel/i,
+      })
+    ).toBeTruthy();
 
     const { restoreButton, restoreDialog } = await openRestoreDialog(user, schemaDialog);
     await user.click(within(restoreDialog).getByRole('button', { name: /Cancelar/i }));
 
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull());
-    expect(within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla TemporaryRestoreCancel/i })).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull()
+    );
+    expect(
+      within(schemaDialog).getByRole('button', {
+        name: /Ver detalle de tabla TemporaryRestoreCancel/i,
+      })
+    ).toBeTruthy();
     await expectFocus(restoreButton);
   });
 
@@ -213,9 +245,15 @@ describe('App SQL flows', () => {
 
     await user.keyboard('{Escape}');
 
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull()
+    );
     expect(screen.getByRole('dialog', { name: /Base de datos del sandbox/i })).toBeTruthy();
-    expect(within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla TemporaryRestoreEscape/i })).toBeTruthy();
+    expect(
+      within(schemaDialog).getByRole('button', {
+        name: /Ver detalle de tabla TemporaryRestoreEscape/i,
+      })
+    ).toBeTruthy();
     await expectFocus(restoreButton);
   });
 
@@ -226,19 +264,36 @@ describe('App SQL flows', () => {
 
     await replaceSqlAndRun(user, historySql);
     await replaceSqlAndRun(user, 'CREATE TABLE TemporaryRestoreConfirm (id INT PRIMARY KEY);');
-    await replaceSqlAndRun(user, "UPDATE Customers SET first_name = 'Alicia' WHERE customer_id = 1;");
+    await replaceSqlAndRun(
+      user,
+      "UPDATE Customers SET first_name = 'Alicia' WHERE customer_id = 1;"
+    );
     const editor = await replaceSqlAndRun(user, 'DROP TABLE Employees;');
 
     const { schemaDialog } = await openSandbox(user);
-    expect(within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla TemporaryRestoreConfirm/i })).toBeTruthy();
-    expect(within(schemaDialog).queryByRole('button', { name: /Ver detalle de tabla Employees/i })).toBeNull();
+    expect(
+      within(schemaDialog).getByRole('button', {
+        name: /Ver detalle de tabla TemporaryRestoreConfirm/i,
+      })
+    ).toBeTruthy();
+    expect(
+      within(schemaDialog).queryByRole('button', { name: /Ver detalle de tabla Employees/i })
+    ).toBeNull();
 
     const { restoreDialog } = await openRestoreDialog(user, schemaDialog);
     await user.click(within(restoreDialog).getByRole('button', { name: /^Restaurar base$/i }));
 
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull());
-    expect(within(schemaDialog).queryByRole('button', { name: /Ver detalle de tabla TemporaryRestoreConfirm/i })).toBeNull();
-    expect(within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla Employees/i })).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull()
+    );
+    expect(
+      within(schemaDialog).queryByRole('button', {
+        name: /Ver detalle de tabla TemporaryRestoreConfirm/i,
+      })
+    ).toBeNull();
+    expect(
+      within(schemaDialog).getByRole('button', { name: /Ver detalle de tabla Employees/i })
+    ).toBeTruthy();
     expect(editor.value).toBe('DROP TABLE Employees;');
     expect(screen.getByText(/Tu consulta se convert/i)).toBeTruthy();
 
@@ -249,7 +304,11 @@ describe('App SQL flows', () => {
     expect(screen.queryByText('Alicia')).toBeNull();
 
     await user.click(screen.getByRole('button', { name: /Abrir historial/i }));
-    expect(within(await screen.findByRole('dialog', { name: /Historial de consultas/i })).getByText(historySql)).toBeTruthy();
+    expect(
+      within(await screen.findByRole('dialog', { name: /Historial de consultas/i })).getByText(
+        historySql
+      )
+    ).toBeTruthy();
   });
 
   test('Reset preserves database changes while restore returns to the seed database', async () => {
@@ -266,7 +325,9 @@ describe('App SQL flows', () => {
     const { schemaDialog } = await openSandbox(user);
     const { restoreDialog } = await openRestoreDialog(user, schemaDialog);
     await user.click(within(restoreDialog).getByRole('button', { name: /^Restaurar base$/i }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Restaurar base de ejemplo/i })).toBeNull()
+    );
     await user.click(within(schemaDialog).getByRole('button', { name: /Cerrar base de datos/i }));
 
     await replaceSqlAndRun(user, 'SELECT name FROM Categories WHERE category_id = 4;');
@@ -277,7 +338,9 @@ describe('App SQL flows', () => {
   test('imports a valid SQL file and applies it to the temporary database', async () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
-    const text = vi.fn().mockResolvedValue("INSERT INTO Categories (category_id, name) VALUES (4, 'Books');");
+    const text = vi
+      .fn()
+      .mockResolvedValue("INSERT INTO Categories (category_id, name) VALUES (4, 'Books');");
     const input = importInput(container);
 
     await user.upload(input, sqlFile({ name: 'categories.sql', text }));
@@ -341,7 +404,9 @@ describe('App SQL flows', () => {
 
     await user.upload(input, sqlFile({ name: 'invalid.sql', text }));
 
-    expect(await screen.findByText(/El archivo SQL debe finalizar cada sentencia con punto y coma/i)).toBeTruthy();
+    expect(
+      await screen.findByText(/El archivo SQL debe finalizar cada sentencia con punto y coma/i)
+    ).toBeTruthy();
     expect(screen.queryByText(/No se pudo leer el archivo SQL/i)).toBeNull();
     expect(input.value).toBe('');
   });
@@ -349,7 +414,9 @@ describe('App SQL flows', () => {
   test('allows selecting the same imported file again after each attempt', async () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
-    const text = vi.fn().mockResolvedValue('SELECT first_name FROM Customers WHERE customer_id = 1;');
+    const text = vi
+      .fn()
+      .mockResolvedValue('SELECT first_name FROM Customers WHERE customer_id = 1;');
     const file = sqlFile({ name: 'same.sql', text });
     const input = importInput(container);
 

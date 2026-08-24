@@ -1,0 +1,145 @@
+/* ========== DESKTOP ALIGNMENT FIXES ========== */
+.workspace-layout {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+.workspace {
+  width: 100%;
+  max-width: 100%;
+}
+.editor-container-split,
+.content-grid,
+.journey,
+.final-result,
+.logical-order,
+.flow,
+.flow-item {
+  width: 100%;
+  max-width: 100%;
+}
+
+.editor-toolbar {
+  position: relative;
+  z-index: 2;
+  min-height: 52px;
+  height: auto;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.editor-toolbar > div:first-child {
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.editor-toolbar-tools {
+  flex: 1 1 360px;
+  min-width: 260px;
+}
+.example-picker {
+  position: relative;
+  z-index: 3;
+  min-width: 0;
+}
+.example-picker select {
+  max-width: min(280px, 100%);
+}
+
+.editor-footer {
+  min-height: 54px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.shortcut {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.actions {
+  flex: 1 1 320px;
+  justify-content: flex-end;
+}
+
+.logical-order {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 7px;
+}
+.logical-order button {
+  flex: 1 1 116px;
+}
+.logical-order button.subquery-order-step {
+  flex: 1 1 150px;
+}
+
+@media (min-width: 992px) and (max-width: 1199px) {
+  .editor-toolbar-tools {
+    justify-content: flex-end;
+  }
+}
+
+/* ========== DESKTOP PRODUCTION-LIKE WIDTH RESET ========== */
+@media (min-width: 992px) {
+  .workspace-layout {
+    width: 100%;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+  .workspace {
+    width: 100%;
+    max-width: none;
+    padding: 24px 0;
+  }
+  .explain-panel {
+    margin: 24px 0;
+  }
+
+  .editor-container-split {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 24px;
+    align-items: start;
+  }
+  .editor-container-split > :first-child {
+    grid-column: span 7;
+    min-width: 0;
+    width: 100%;
+  }
+  .editor-container-split > :last-child {
+    grid-column: span 5;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .content-grid,
+  .journey,
+  .logical-order,
+  .flow,
+  .flow-item,
+  .final-result {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (min-width: 1200px) {
+  .workspace-layout {
+    padding: 0 32px;
+  }
+  .editor-container-split > :first-child {
+    grid-column: span 8;
+  }
+  .editor-container-split > :last-child {
+    grid-column: span 4;
+  }
+}
+
+@media (min-width: 992px) and (max-width: 1199px) {
+  .explain-panel {
+    position: static;
+    max-height: none;
+    margin: 0 0 24px;
+  }
+}

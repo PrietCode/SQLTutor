@@ -1,0 +1,50 @@
+/* ========== SANDBOX SIDEBAR ISOLATION ========== */
+@media (min-width: 1024px) {
+  .schema-panel {
+    width: 280px;
+    max-width: 280px;
+    min-width: 0;
+    flex-shrink: 0;
+  }
+  .table-detail-modal {
+    width: min(980px, calc(100vw - 48px));
+  }
+  .detail-grid {
+    grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+  }
+  .detail-side,
+  .records-detail-card {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .records-detail-card {
+    overflow: hidden;
+  }
+  .detail-table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow: auto;
+  }
+}
+
+/* ========== TABLE DETAIL BELOW FIXED NAV ========== */
+@media (min-width: 851px) {
+  .table-detail-overlay {
+    top: 72px;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    inset: 72px 0 0;
+    place-items: start center;
+    padding: 24px;
+  }
+  .table-detail-modal {
+    max-height: calc(100dvh - 72px - 48px);
+  }
+}
+
+@media (max-width: 850px) {
+  .table-detail-overlay {
+    inset: 0;
+  }
+}

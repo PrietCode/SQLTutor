@@ -24,48 +24,68 @@ export const writtenOrderIndex = (sql, step, index) => {
     UPDATE: /\bUPDATE\b/,
     DELETE: /\bDELETE\b/,
     TARGET: /\b(?:INTO|UPDATE|FROM)\b/,
-    PARSE: /\b(?:CREATE|ALTER|DROP|TRUNCATE)\b/
+    PARSE: /\b(?:CREATE|ALTER|DROP|TRUNCATE)\b/,
   };
-  const match = upper.match(patterns[step.type] || patterns[type] || new RegExp(`\\b${type.replace(/\s+/g, '\\s+')}\\b`));
+  const match = upper.match(
+    patterns[step.type] || patterns[type] || new RegExp(`\\b${type.replace(/\s+/g, '\\s+')}\\b`)
+  );
   return (match ? match.index : index * 1000) + index / 100;
 };
 
 function subqueryRows(group) {
   const firstSummary = group.summaries[0];
-  const matchingSteps = group.traced && firstSummary?.id != null ? group.steps.filter((step) => step.subqueryTraceId === firstSummary.id) : group.steps;
+  const matchingSteps =
+    group.traced && firstSummary?.id != null
+      ? group.steps.filter((step) => step.subqueryTraceId === firstSummary.id)
+      : group.steps;
   return matchingSteps.at(-1)?.rows || [];
 }
 
 function subqueryStepTitle(parentStep, group, index, total) {
   const suffix = total > 1 ? ` ${index + 1}` : '';
-  return group.mode === 'correlated' ? `Subconsulta correlacionada${suffix} de ${parentStep.type}` : `Subconsulta${suffix} de ${parentStep.type}`;
+  return group.mode === 'correlated'
+    ? `Subconsulta correlacionada${suffix} de ${parentStep.type}`
+    : `Subconsulta${suffix} de ${parentStep.type}`;
 }
 
 export function buildVisualSteps(execution) {
   if (!execution) return [];
   return execution.steps.flatMap((item, originalIndex) => {
-    const mainStep = { id: `main-${originalIndex}`, kind: 'main', item, parentStep: item, originalIndex, orderOffset: 0 };
+    const mainStep = {
+      id: `main-${originalIndex}`,
+      kind: 'main',
+      item,
+      parentStep: item,
+      originalIndex,
+      orderOffset: 0,
+    };
     const groups = buildSubqueryGroups(item.compare);
-    return [mainStep, ...groups.map((group, groupIndex) => {
-      const rows = subqueryRows(group);
-      return {
-        id: `subquery-${originalIndex}-${groupIndex}`,
-        kind: 'subquery',
-        originalIndex,
-        parentStep: item,
-        orderOffset: (groupIndex + 1) / 100,
-        item: {
-          type: SUBQUERY_STEP_TYPE,
-          title: subqueryStepTitle(item, group, groupIndex, groups.length),
-          detail: group.mode === 'correlated' ? 'La subconsulta se ejecuta una vez por cada fila externa. Usá las iteraciones para ver qué valor se inyecta y qué devuelve cada ciclo.' : 'La subconsulta se ejecuta como recorrido interno y su resultado vuelve a la condición externa.',
-          rows,
-          count: group.mode === 'correlated' ? group.summaries.length : rows.length,
-          accent: 'amber',
-          parentType: item.type,
-          subqueryGroup: group,
-          parentStep: item
-        }
-      };
-    })];
+    return [
+      mainStep,
+      ...groups.map((group, groupIndex) => {
+        const rows = subqueryRows(group);
+        return {
+          id: `subquery-${originalIndex}-${groupIndex}`,
+          kind: 'subquery',
+          originalIndex,
+          parentStep: item,
+          orderOffset: (groupIndex + 1) / 100,
+          item: {
+            type: SUBQUERY_STEP_TYPE,
+            title: subqueryStepTitle(item, group, groupIndex, groups.length),
+            detail:
+              group.mode === 'correlated'
+                ? 'La subconsulta se ejecuta una vez por cada fila externa. Usá las iteraciones para ver qué valor se inyecta y qué devuelve cada ciclo.'
+                : 'La subconsulta se ejecuta como recorrido interno y su resultado vuelve a la condición externa.',
+            rows,
+            count: group.mode === 'correlated' ? group.summaries.length : rows.length,
+            accent: 'amber',
+            parentType: item.type,
+            subqueryGroup: group,
+            parentStep: item,
+          },
+        };
+      }),
+    ];
   });
 }

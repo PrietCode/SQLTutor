@@ -12,7 +12,12 @@ Este documento describe el estado real actual del frontend despues de las refact
 src/
 ├── App.jsx
 ├── main.jsx
-├── styles.css
+├── styles/
+│   ├── index.css
+│   ├── tokens.css
+│   ├── base.css
+│   ├── ... estilos por dominio, tema y responsive
+│   └── sandbox-responsive.css
 ├── components/
 │   ├── editor/
 │   ├── explanation/
@@ -39,7 +44,8 @@ docs/
 
 Responsabilidades por grupo:
 
-- `src/main.jsx`: punto de entrada React y carga de `styles.css`.
+- `src/main.jsx`: punto de entrada React y carga del manifiesto global `styles/index.css`.
+- `src/styles/`: estilos globales separados por fundacion, dominio, tema y responsive. `index.css` define el orden de carga para preservar la cascada existente.
 - `src/App.jsx`: composition root. Coordina runtime, editor, historial, navegacion visual, overlays, sandbox, biblioteca y layout principal.
 - `src/components/`: componentes presentacionales o de dominio con estado local acotado.
 - `src/hooks/`: comportamiento React reutilizable o aislado.
@@ -90,12 +96,12 @@ La base temporal se inicializa en `useSqlRuntime` con `useState(createSeedDataba
 
 El motor devuelve una nueva `db` para DML y DDL mediante copias internas. `SELECT` devuelve la misma base recibida. El runtime siempre adopta `result.db`, lo que mantiene un unico estado de sandbox para editor, importacion y panel de base.
 
-Limpiar el editor o la ejecucion llama a `clearExecution()` y no llama a `createSeedDatabase()`. Por eso se conservan tablas creadas, registros insertados, modificaciones y eliminaciones hasta que la sesion se recargue o se implemente una restauracion explicita.
+Limpiar el editor o la ejecucion llama a `clearExecution()` y no llama a `createSeedDatabase()`. Por eso se conservan tablas creadas, registros insertados, modificaciones y eliminaciones hasta que la sesion se recargue o el usuario confirme la accion separada de restaurar la base de ejemplo.
 
 ## Componentes principales
 
 - `SqlEditor`: editor, selector de ejemplos, importacion, mensajes, tracker de clausulas y botones de ejecucion. No conoce el motor.
-- `SchemaPanel`: vista del sandbox, creacion de tablas por SQL, eliminacion de tablas y apertura de detalle.
+- `SchemaPanel`: vista del sandbox, creacion y eliminacion de tablas, apertura de detalle y restauracion confirmada de la base de ejemplo.
 - `TableDetailModal`: detalle de columnas, claves foraneas y registros actuales de una tabla.
 - `ResultPanel`: resultado compacto de la ejecucion actual.
 - `Journey`: recorrido visual, orden logico/escrito y navegacion por pasos.
@@ -112,7 +118,7 @@ Los componentes no importan `src/lib/sqlEngine.js`. El estado local se usa donde
 
 ## Hooks
 
-- `useSqlRuntime()`: responsable de base temporal, ejecucion actual, error, llamadas al motor, ejecucion de scripts, acciones SQL del sandbox, eliminacion de tablas y limpieza de ejecucion/error. API publica: `{ database, execution, error, executeQuery, executeScript, executeSandboxSql, deleteTable, clearExecution, clearError, showError }`.
+- `useSqlRuntime()`: responsable de base temporal, ejecucion actual, error, llamadas al motor, ejecucion de scripts, acciones SQL del sandbox, eliminacion/restauracion de tablas y limpieza de ejecucion/error. API publica: `{ database, execution, error, executeQuery, executeScript, executeSandboxSql, deleteTable, restoreSeedDatabase, clearExecution, clearError, showError }`.
 - `useSqlFileImport({ onImportSqlFile, onError })`: responsable de input file, validacion previa de metadata, lectura con `file.text()`, manejo de errores de lectura, preparacion del contenido importado, reseteo del input y mensaje de importacion. No ejecuta SQL.
 - `useOverlayState()`: responsable de apertura/cierre de sandbox, biblioteca, historial y explicacion. Calcula `overlayOpen` sin incluir la explicacion porque no es overlay bloqueante. Usa scroll seguro con guardas para `window`/`document`.
 - `useBodyScrollLock(locked)`: agrega/remueve la clase `overlay-locked` al `body` cuando un overlay bloqueante esta abierto. Limpia en el cleanup del efecto.
@@ -188,7 +194,17 @@ Datos derivados:
 - Mantener `useSqlFileImport` separado del runtime para no mezclar lectura de archivos con ejecucion SQL.
 - Mantener `visual/` como capa pura para transformar modelos pedagogicos.
 - No introducir dependencias nuevas para resolver problemas que hoy se resuelven con React, Vite y JavaScript nativo.
-- No implementar restauracion de base de ejemplo dentro de reset; sigue siendo una accion futura destructiva y confirmada.
+- Mantener la restauracion de base de ejemplo como una accion destructiva, confirmada y separada de reset.
+
+## Estilos
+
+Los estilos siguen siendo globales porque hay clases compartidas entre dominios, estados dinamicos como `accent-*` y reglas de tema bajo `.app-shell.dark-mode`. Para hacer esa cascada mantenible, `src/styles/index.css` es el unico punto de entrada y carga los archivos en un orden explicito.
+
+- Fundacion: `tokens.css`, `base.css` y `primitives.css`.
+- Dominios visuales: layout, editor, tablas, ejecucion, subconsultas, explicacion, sandbox y overlays.
+- Variantes transversales: `dark.css` y los archivos responsive/refinements cargados al final.
+
+La division y limpieza posterior preservan las reglas vivas y su orden efectivo. Se retiraron selectores sin consumidor actual y bloques completamente reemplazados, sin introducir CSS Modules ni CSS-in-JS. El orden de imports sigue siendo relevante y los cambios responsive requieren validacion visual en navegador real.
 
 ## Router, Pages y Context
 
@@ -217,7 +233,9 @@ Infraestructura actual:
 - `npm run test:engine`: usa `node --test` sobre `src/lib/sqlEngine.test.js`.
 - `npm run test:service`: usa `node --test` sobre `src/services/sqlImportService.test.js`.
 - `npm run test:ui`: usa Vitest con jsdom, Testing Library React y user-event sobre `src/App.test.jsx`.
-- Tests actuales en este corte: 50 del motor, 14 del servicio de importacion y 14 de UI.
+- `npm run format`: aplica Prettier a CSS, JavaScript, JSX, tests y `vite.config.js`.
+- `npm run format:check`: verifica el formato definido en `.prettierrc.json`.
+- Tests actuales en este corte: 50 del motor, 14 del servicio de importacion y 20 de UI.
 
 Cobertura alta:
 
@@ -232,7 +250,7 @@ Cobertura alta:
 - NULL, LIKE, fechas y conversiones.
 - Errores pedagogicos del motor.
 - Reglas puras de importacion: extension, tamano, contenido vacio y BOM inicial.
-- Flujos UI basicos: ejecucion, errores, reset sin restaurar base, historial, overlays accesibles e importacion de archivos.
+- Flujos UI basicos: ejecucion, errores, reset sin restaurar base, restauracion confirmada de la base, historial, overlays accesibles e importacion de archivos.
 
 Cobertura faltante:
 
@@ -245,7 +263,7 @@ Cobertura faltante:
 - La cobertura automatizada cubre motor, servicio de importacion y flujos UI principales; los detalles responsive y visuales finos dependen de validacion manual.
 - No hay persistencia de historial ni workspace.
 - No hay router ni paginas informativas todavia.
-- `styles.css` es global y extenso; funciona, pero su cascada es sensible al orden.
+- Los estilos son globales por diseno y estan divididos en `src/styles/`; el orden de `index.css` sigue siendo parte de su contrato de cascada.
 - Algunos componentes usan keys por indice para filas sin identificador estable; es aceptable hoy porque son tablas derivadas y efimeras, pero podria ser fragil con edicion interactiva.
 - `docs/ARCHITECTURE_AUDIT.md` queda como documento historico desactualizado.
 
@@ -260,7 +278,7 @@ Necesarios antes de nuevas funcionalidades grandes:
 Recomendados:
 
 - Agregar tests unitarios para helpers puros nuevos si se expanden `visual/` o `services/`.
-- Diseñar la accion separada de restaurar base de ejemplo con confirmacion, segun `docs/ROADMAP.md`.
+- Mantener la separacion entre reset y restauracion confirmada de base de ejemplo en futuros cambios del sandbox.
 
 Futuros:
 

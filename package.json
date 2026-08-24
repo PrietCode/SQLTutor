@@ -10,7 +10,9 @@
     "test:engine": "node --test src/lib/sqlEngine.test.js",
     "test:service": "node --test src/services/sqlImportService.test.js",
     "test:ui": "vitest run",
-    "test": "npm run test:engine && npm run test:service && npm run test:ui"
+    "test": "npm run test:engine && npm run test:service && npm run test:ui",
+    "format": "prettier --write \"src/**/*.{js,jsx,css}\" vite.config.js",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,css}\" vite.config.js"
   },
   "dependencies": {
     "react": "18.3.1",
@@ -22,6 +24,7 @@
     "@testing-library/user-event": "14.5.2",
     "@vitejs/plugin-react": "4.3.4",
     "jsdom": "25.0.1",
+    "prettier": "^3.9.6",
     "vite": "5.4.21",
     "vitest": "2.1.9"
   }

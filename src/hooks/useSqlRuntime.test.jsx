@@ -6,14 +6,25 @@ describe('useSqlRuntime restoreSeedDatabase', () => {
   test('restores the seed database and clears execution state', () => {
     const { result } = renderHook(() => useSqlRuntime());
 
-    expect(Object.keys(result.current.database)).toEqual(['Customers', 'Categories', 'Products', 'Orders', 'CustomerImports', 'Employees']);
+    expect(Object.keys(result.current.database)).toEqual([
+      'Customers',
+      'Categories',
+      'Products',
+      'Orders',
+      'CustomerImports',
+      'Employees',
+    ]);
     expect(result.current.database.Customers[0].first_name).toBe('Ana');
 
     act(() => {
-      result.current.executeSandboxSql('CREATE TABLE SessionNotes (id INT PRIMARY KEY, title VARCHAR(40));');
+      result.current.executeSandboxSql(
+        'CREATE TABLE SessionNotes (id INT PRIMARY KEY, title VARCHAR(40));'
+      );
     });
     act(() => {
-      result.current.executeSandboxSql("UPDATE Customers SET first_name = 'Alicia' WHERE customer_id = 1;");
+      result.current.executeSandboxSql(
+        "UPDATE Customers SET first_name = 'Alicia' WHERE customer_id = 1;"
+      );
     });
     act(() => {
       result.current.deleteTable('Employees');

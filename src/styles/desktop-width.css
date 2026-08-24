@@ -1,0 +1,118 @@
+/* ========== LAPTOP/DESKTOP WIDTH UTILIZATION (>=1024px) ========== */
+@media (min-width: 1024px) {
+  .workspace-layout {
+    width: 100%;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+  .workspace {
+    width: 100%;
+    max-width: none;
+    padding: 24px 0;
+  }
+  .content-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100%;
+    max-width: none;
+  }
+  .editor-container-split {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 24px;
+    align-items: start;
+  }
+  .editor-container-split > :first-child {
+    grid-column: span 7;
+    width: 100%;
+    min-width: 0;
+  }
+  .editor-container-split > :last-child {
+    grid-column: span 5;
+    width: 100%;
+    min-width: 0;
+  }
+  .journey,
+  .logical-order,
+  .flow,
+  .flow-item,
+  .final-result,
+  .explain-panel {
+    width: 100%;
+    max-width: none;
+  }
+  .explain-panel {
+    position: static;
+    max-height: none;
+    margin: 0 0 24px;
+  }
+}
+
+/* ========== FULL-WIDTH INNER SECTIONS (DESKTOP ONLY) ========== */
+@media (min-width: 1024px) {
+  main,
+  .workspace-layout,
+  .workspace,
+  .editor-container-split,
+  .editor-card,
+  .step-controller-card,
+  .content-grid,
+  .journey,
+  .logical-order,
+  .flow,
+  .flow-item,
+  .stage-card,
+  .final-result,
+  .explain-panel,
+  .library-drawer,
+  .schema-panel {
+    width: 100%;
+  }
+
+  .workspace,
+  .editor-container-split,
+  .editor-card,
+  .step-controller-card,
+  .content-grid,
+  .journey,
+  .logical-order,
+  .flow,
+  .flow-item,
+  .stage-card,
+  .final-result,
+  .explain-panel {
+    max-width: none;
+  }
+
+  .workspace-layout {
+    max-width: 1400px;
+  }
+  .editor-container-split {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
+  .editor-container-split > .editor-card {
+    grid-column: span 7;
+  }
+  .editor-container-split > .step-controller-card {
+    grid-column: span 5;
+  }
+}
+
+@media (min-width: 1280px) {
+  .editor-container-split > .editor-card {
+    grid-column: span 8;
+  }
+  .editor-container-split > .step-controller-card {
+    grid-column: span 4;
+  }
+}
+
+@media (min-width: 1280px) {
+  .explain-panel {
+    position: sticky;
+    top: 92px;
+    max-height: calc(100vh - 110px);
+    margin: 24px 0;
+  }
+}

@@ -7,7 +7,7 @@ export const SQL_IMPORT_MESSAGES = {
   invalidFile: 'Solo se pueden importar archivos .sql o .txt con instrucciones SQL.',
   tooLarge: `El archivo SQL es demasiado grande. El limite es ${SQL_IMPORT_MAX_SIZE_LABEL} para mantener la ejecucion en memoria.`,
   empty: 'El archivo SQL esta vacio. Agrega instrucciones SQL antes de importarlo.',
-  readError: 'No se pudo leer el archivo SQL. Intenta seleccionarlo nuevamente.'
+  readError: 'No se pudo leer el archivo SQL. Intenta seleccionarlo nuevamente.',
 };
 
 const fileExtension = (fileName) => {
@@ -17,11 +17,13 @@ const fileExtension = (fileName) => {
   return name.slice(dotIndex).toLowerCase();
 };
 
-export const isSqlImportFile = (fileName) => SQL_IMPORT_ALLOWED_EXTENSIONS.includes(fileExtension(fileName));
+export const isSqlImportFile = (fileName) =>
+  SQL_IMPORT_ALLOWED_EXTENSIONS.includes(fileExtension(fileName));
 
 export const validateSqlImportFile = (file) => {
   if (!isSqlImportFile(file?.name)) throw new Error(SQL_IMPORT_MESSAGES.invalidFile);
-  if (typeof file.size === 'number' && file.size > SQL_IMPORT_MAX_BYTES) throw new Error(SQL_IMPORT_MESSAGES.tooLarge);
+  if (typeof file.size === 'number' && file.size > SQL_IMPORT_MAX_BYTES)
+    throw new Error(SQL_IMPORT_MESSAGES.tooLarge);
   return file;
 };
 

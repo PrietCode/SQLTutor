@@ -1,0 +1,95 @@
+/* ========== SCHEMA ACTIONS & DELETE TABLE ========== */
+.schema-actions {
+  margin-bottom: 14px;
+}
+.add-table-btn {
+  width: 100%;
+  justify-content: center;
+}
+.add-table-form {
+  background: #f3f6fc;
+  border: 1px solid #d8e1ee;
+  border-radius: 9px;
+  padding: 11px;
+  margin-bottom: 14px;
+}
+.add-table-form label {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  color: #4b5d79;
+  margin-bottom: 5px;
+}
+.add-table-form textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 7px;
+  border: 1px solid #d2dbeb;
+  border-radius: 6px;
+  background: #fafbff;
+  font:
+    500 10px/1.5 'JetBrains Mono',
+    monospace;
+  color: #1d263b;
+  resize: vertical;
+  outline: none;
+}
+.add-table-form textarea:focus {
+  border-color: #7a9ef0;
+  box-shadow: 0 0 0 2px #e5edff;
+}
+.form-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* Delete button inside schema card */
+.schema-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.expand-toggle-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 11px;
+  border: 0;
+  background: white;
+  color: #2e3850;
+  text-align: left;
+}
+.delete-table-btn {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #a8b1c2;
+  border-radius: 6px;
+  margin-right: 5px;
+  transition: 0.15s;
+}
+.delete-table-btn:hover {
+  color: #d3575e;
+  background: #fff0f0;
+}
+.schema-card-header .expand-toggle-btn small {
+  color: #969eb0;
+  font-size: 10px;
+  margin-left: auto;
+}
+
+.no-records-note {
+  padding: 8px;
+  text-align: center;
+  color: #99a1b1;
+  background: #f8f9fb;
+  border: 1px dashed #d9dee8;
+  border-radius: 6px;
+  font-size: 9px;
+}

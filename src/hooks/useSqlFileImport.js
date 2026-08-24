@@ -1,5 +1,10 @@
 import { useRef, useState } from 'react';
-import { SQL_IMPORT_FILE_ACCEPT, SQL_IMPORT_MESSAGES, prepareImportedSql, validateSqlImportFile } from '../services/sqlImportService';
+import {
+  SQL_IMPORT_FILE_ACCEPT,
+  SQL_IMPORT_MESSAGES,
+  prepareImportedSql,
+  validateSqlImportFile,
+} from '../services/sqlImportService';
 
 export function useSqlFileImport({ onImportSqlFile, onError }) {
   const [importMessage, setImportMessage] = useState('');
@@ -10,7 +15,10 @@ export function useSqlFileImport({ onImportSqlFile, onError }) {
 
   const handleImportFileChange = async (event) => {
     const file = event.target.files?.[0];
-    if (!file) { event.target.value = ''; return; }
+    if (!file) {
+      event.target.value = '';
+      return;
+    }
     try {
       validateSqlImportFile(file);
       let rawContent = '';

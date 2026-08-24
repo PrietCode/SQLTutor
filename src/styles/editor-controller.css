@@ -1,0 +1,61 @@
+/* ========== EDITOR SPLIT LAYOUT ========== */
+.editor-container-split {
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 850px) {
+  .editor-container-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ========== STEP CONTROLLER CARD ========== */
+.step-controller-card {
+  background: var(--panel);
+  border: 1px solid #dfe4ed;
+  border-radius: 14px;
+  box-shadow: 0 7px 24px #1c315b0a;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 180px;
+}
+.step-controller-card.empty {
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 20px 14px;
+}
+.step-controller-card.empty .controller-header {
+  margin-bottom: 10px;
+}
+.controller-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: #fbfcfe;
+  border-bottom: 1px solid #e8ebf1;
+}
+.title-area {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.controller-header h3 {
+  margin: 0;
+  font-size: 13px;
+}
+.controller-body {
+  padding: 12px 14px;
+  flex: 1;
+}
+.controller-footer {
+  padding: 10px 14px;
+  border-top: 1px solid #e8ebf1;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}

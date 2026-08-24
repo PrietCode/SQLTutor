@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Production build and local Vite cache
+dist/
+.vite/
+
+# Local environment configuration
+.env
+.env.*
+!.env.example
+
+# Package manager logs
+npm-debug.log*
+
+# Operating system files
+.DS_Store

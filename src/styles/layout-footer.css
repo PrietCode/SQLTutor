@@ -1,0 +1,116 @@
+.welcome-state {
+  min-height: 390px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+  color: #798399;
+  background: white;
+  border: 1px dashed #d7deea;
+  border-radius: 13px;
+}
+.welcome-state h2 {
+  margin: 24px 0 7px;
+  color: #2f3a52;
+  font-size: 18px;
+}
+.welcome-state p {
+  max-width: 390px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.welcome-graphic {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.welcome-graphic span {
+  padding: 9px 11px;
+  color: #5076cf;
+  background: #edf3ff;
+  border: 1px solid #d7e3ff;
+  border-radius: 8px;
+  font:
+    700 9px 'JetBrains Mono',
+    monospace;
+}
+.welcome-graphic i {
+  width: 24px;
+  height: 1px;
+  background: #a9bbe4;
+  position: relative;
+}
+.welcome-graphic i:after {
+  content: '›';
+  position: absolute;
+  right: -2px;
+  top: -10px;
+  font-style: normal;
+  font-size: 17px;
+}
+.final-result {
+  margin-top: 20px;
+  padding: 17px;
+}
+.final-result .section-title > span {
+  color: #718098;
+  font-size: 10px;
+}
+.final-result table {
+  font-size: 11px;
+}
+.final-result th {
+  font-size: 9px;
+}
+.app-footer {
+  margin-left: 0;
+  padding: 18px 24px 24px;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  color: #7a8599;
+  background: #f6f8fc;
+  border-top: 1px solid #e5eaf2;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+.footer-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.app-footer strong {
+  color: #34425b;
+}
+.footer-main span:not(:last-child)::after {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-left: 12px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: #c6ceda;
+}
+.footer-badge {
+  padding: 5px 9px;
+  color: #3b68c8;
+  background: #edf3ff;
+  border: 1px solid #dbe6ff;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+.footer-legal {
+  max-width: 900px;
+  margin: 0;
+  color: #8d97aa;
+  font-size: 10px;
+  line-height: 1.55;
+  font-weight: 600;
+}

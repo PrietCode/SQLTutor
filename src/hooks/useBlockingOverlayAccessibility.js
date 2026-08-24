@@ -7,7 +7,7 @@ const FOCUSABLE_SELECTOR = [
   'select:not([disabled])',
   'textarea:not([disabled])',
   '[tabindex]:not([tabindex="-1"])',
-  '[contenteditable="true"]'
+  '[contenteditable="true"]',
 ].join(',');
 
 const overlayStack = [];
@@ -21,7 +21,9 @@ const isTopOverlay = (id) => overlayStack[overlayStack.length - 1] === id;
 
 const focusableElements = (container) => {
   if (!container) return [];
-  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)).filter((element) => !element.hidden && !element.closest('[inert]'));
+  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)).filter(
+    (element) => !element.hidden && !element.closest('[inert]')
+  );
 };
 
 const focusElement = (element) => {
@@ -30,7 +32,8 @@ const focusElement = (element) => {
 
 const scheduleFrame = (callback) => {
   if (typeof window === 'undefined') return undefined;
-  if (typeof window.requestAnimationFrame === 'function') return window.requestAnimationFrame(callback);
+  if (typeof window.requestAnimationFrame === 'function')
+    return window.requestAnimationFrame(callback);
   return window.setTimeout(callback, 0);
 };
 

@@ -1,0 +1,121 @@
+/* ========== MOBILE GUIDE, HEADER AND LIBRARY REFINEMENTS ========== */
+.schema-panel,
+.library-drawer {
+  scrollbar-width: none;
+}
+.schema-panel::-webkit-scrollbar,
+.library-drawer::-webkit-scrollbar {
+  display: none;
+}
+
+@media (max-width: 991px) {
+  .brand small {
+    display: none;
+  }
+  .topbar {
+    padding: 0 16px;
+    gap: 8px;
+  }
+  .topbar nav,
+  .header-actions {
+    gap: 6px;
+  }
+  .topbar nav button,
+  .topbar nav .nav-icon-button,
+  .theme-toggle {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    padding: 6px;
+  }
+  .library-shortcut {
+    display: grid !important;
+  }
+  .library-text-button {
+    display: none !important;
+  }
+
+  .explain-panel,
+  .explain-panel.open {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: 80;
+    display: block;
+    width: 100%;
+    max-width: none;
+    max-height: 80vh;
+    overflow-y: auto;
+    margin: 0;
+    padding-bottom: 10px;
+    border-radius: 18px 18px 0 0;
+    border: 1px solid #27334a;
+    border-bottom: 0;
+    box-shadow: 0 -18px 50px #0007;
+  }
+  .explain-panel:not(.open) {
+    display: none;
+  }
+  .explain-drawer-head {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding: 14px 14px 8px;
+    background: white;
+    border-bottom: 1px solid #edf0f5;
+  }
+  .explain-drawer-head .icon-button {
+    width: 34px;
+    height: 34px;
+  }
+
+  .library-drawer {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+    padding: 18px;
+    border-radius: 16px 16px 0 0;
+  }
+  .library-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .library-drawer article {
+    padding: 12px;
+    border: 1px solid #eceff4;
+    border-radius: 12px;
+    background: #fbfcfe;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 991px) {
+  .brand small {
+    display: block;
+  }
+  .library-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 992px) {
+  .library-shortcut {
+    display: none !important;
+  }
+  .library-text-button {
+    display: flex !important;
+  }
+}
+
+@media (max-width: 991px) {
+  .app-shell.dark-mode .explain-drawer-head {
+    background: #121a2b;
+    border-bottom-color: #27334a;
+  }
+  .app-shell.dark-mode .library-drawer article {
+    background: #101827;
+    border-color: #2a3650;
+  }
+}

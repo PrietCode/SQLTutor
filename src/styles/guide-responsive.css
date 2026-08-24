@@ -1,0 +1,208 @@
+/* ========== MOBILE INLINE GUIDE AND NESTED TRACE CONTAINMENT ========== */
+@media (max-width: 991px) {
+  .explain-panel,
+  .explain-panel.open {
+    position: relative;
+    inset: auto;
+    z-index: auto;
+    display: block;
+    width: auto;
+    max-width: 100%;
+    max-height: none;
+    overflow: visible;
+    margin: 0 18px 18px;
+    padding-bottom: 0;
+    border: 1px solid #dfe4ed;
+    border-radius: 12px;
+    box-shadow: 0 7px 22px #1b315c08;
+  }
+  .explain-panel:not(.open) {
+    display: none;
+  }
+  .explain-drawer-head {
+    position: static;
+    padding: 16px 16px 0;
+    background: transparent;
+    border-bottom: 0;
+  }
+  .explain-drawer-head .icon-button {
+    display: grid;
+  }
+  .app-shell.dark-mode .explain-drawer-head {
+    background: transparent;
+    border-bottom: 0;
+  }
+
+  .table-detail-overlay {
+    align-items: start;
+    padding: 76px 10px 10px;
+  }
+  .table-detail-modal {
+    width: 100%;
+    max-height: calc(100dvh - 88px);
+    padding: 16px;
+  }
+  .detail-close-btn {
+    top: 10px;
+    right: 10px;
+    z-index: 4;
+  }
+  .detail-header {
+    padding-right: 42px;
+  }
+
+  .subquery-carousel,
+  .subquery-cycle-shell,
+  .subquery-branch,
+  .subquery-flow-item,
+  .subquery-card,
+  .subquery-stage {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .subquery-carousel {
+    padding: 8px;
+  }
+  .subquery-branch,
+  .subquery-card {
+    padding: 8px !important;
+  }
+  .subquery-carousel-body {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .external-row-panel {
+    width: 100%;
+    max-width: 100%;
+    order: -1;
+  }
+  .subquery-card .table-wrap,
+  .subquery-branch .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  .subquery-card .table-wrap th,
+  .subquery-card .table-wrap td,
+  .subquery-branch .table-wrap th,
+  .subquery-branch .table-wrap td {
+    white-space: nowrap;
+    padding: 6px 8px;
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 620px) {
+  .explain-panel,
+  .explain-panel.open {
+    margin: 0 12px 14px;
+  }
+  .table-detail-overlay {
+    padding-top: 68px;
+  }
+  .table-detail-modal {
+    max-height: calc(100dvh - 78px);
+  }
+}
+
+@media (min-width: 1024px) {
+  .explain-drawer-head .icon-button {
+    display: none;
+  }
+}
+
+/* ========== MOBILE SHORT VIEWPORT GUIDE SHEET ========== */
+@media (max-width: 767px) {
+  .brand small {
+    display: none;
+  }
+  .topbar {
+    gap: 8px;
+  }
+  .topbar nav {
+    gap: 4px;
+  }
+  .topbar nav button,
+  .topbar nav .nav-icon-button,
+  .theme-toggle {
+    padding: 6px;
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+  }
+  .header-actions {
+    gap: 4px;
+  }
+
+  .explain-panel,
+  .explain-panel.open {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: 80;
+    display: block;
+    width: 100%;
+    max-width: none;
+    max-height: 85vh;
+    overflow-y: auto;
+    margin: 0;
+    padding-bottom: 10px;
+    border-radius: 18px 18px 0 0;
+    border-left: 0;
+    border-right: 0;
+    box-shadow: 0 -18px 50px #18243e35;
+  }
+  .explain-panel:not(.open) {
+    display: none;
+  }
+  .explain-drawer-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 14px 14px 8px;
+    background: white;
+    border-bottom: 1px solid #edf0f5;
+  }
+  .explain-drawer-head .icon-button {
+    width: 34px;
+    height: 34px;
+  }
+  .explanation {
+    padding: 14px;
+  }
+
+  .editor-card,
+  .step-controller-card,
+  .final-result,
+  .stage-card {
+    max-width: 100%;
+    overflow: hidden;
+  }
+  .code-editor {
+    overflow-x: auto;
+    max-height: 46vh;
+  }
+  .code-editor textarea {
+    min-height: 145px;
+    max-height: 46vh;
+  }
+  .table-wrap,
+  .detail-table-wrap,
+  .external-table-wrap {
+    overflow: auto;
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 767px) {
+  .app-shell.dark-mode .explain-drawer-head {
+    background: #121a2b;
+    border-bottom-color: #27334a;
+  }
+}

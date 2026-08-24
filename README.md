@@ -25,6 +25,8 @@ Comandos disponibles:
 - `npm run test:engine`: ejecuta tests del motor SQL.
 - `npm run test:service`: ejecuta tests del servicio de importacion.
 - `npm run test:ui`: ejecuta tests de integracion UI con Vitest.
+- `npm run format`: aplica el formato consistente de Prettier al codigo propio.
+- `npm run format:check`: verifica que el codigo propio respete el formato configurado.
 
 ## Funcionalidades
 

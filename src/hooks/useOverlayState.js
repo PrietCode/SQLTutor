@@ -12,12 +12,24 @@ export function useOverlayState() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const overlayOpen = schemaOpen || libraryOpen || historyOpen;
 
-  const closeOverlays = () => { setSchemaOpen(false); setLibraryOpen(false); setHistoryOpen(false); };
+  const closeOverlays = () => {
+    setSchemaOpen(false);
+    setLibraryOpen(false);
+    setHistoryOpen(false);
+  };
   const closeSchema = () => setSchemaOpen(false);
   const closeLibrary = () => setLibraryOpen(false);
   const closeHistory = () => setHistoryOpen(false);
-  const openSchema = () => { setSchemaOpen(true); setLibraryOpen(false); setHistoryOpen(false); };
-  const openHistory = () => { setSchemaOpen(false); setLibraryOpen(false); setHistoryOpen(true); };
+  const openSchema = () => {
+    setSchemaOpen(true);
+    setLibraryOpen(false);
+    setHistoryOpen(false);
+  };
+  const openHistory = () => {
+    setSchemaOpen(false);
+    setLibraryOpen(false);
+    setHistoryOpen(true);
+  };
   const openLibrary = () => {
     setSchemaOpen(false);
     setLibraryOpen(true);
@@ -32,5 +44,19 @@ export function useOverlayState() {
     });
   };
 
-  return { schemaOpen, explainOpen, historyOpen, libraryOpen, overlayOpen, openSchema, openLibrary, openHistory, closeSchema, closeLibrary, closeHistory, closeOverlays, toggleExplain };
+  return {
+    schemaOpen,
+    explainOpen,
+    historyOpen,
+    libraryOpen,
+    overlayOpen,
+    openSchema,
+    openLibrary,
+    openHistory,
+    closeSchema,
+    closeLibrary,
+    closeHistory,
+    closeOverlays,
+    toggleExplain,
+  };
 }

@@ -7,15 +7,10 @@
 - Accesibilidad de overlays bloqueantes con foco inicial, focus trap, Escape y retorno de foco.
 - Importacion SQL robusta para `.sql` y `.txt`, con limite de 1 MB, validacion de contenido vacio, BOM inicial y reutilizacion del input.
 - Boton Restaurar base de ejemplo
+- Reestructuracion y limpieza de estilos: `src/styles/index.css` coordina archivos separados por fundacion, dominio, tema y responsive; se retiraron selectores sin uso y reglas reemplazadas.
+- Correccion del scroll movil de Biblioteca SQL mediante un drawer anclado al viewport visible.
 
 ## Próximas mejoras
-
-### Reestructuración de `styles.css`
-
-- Reordenar y organizar `styles.css` siguiendo una estructura lógica y consistente, con el objetivo de mejorar su legibilidad, mantenibilidad y facilitar la incorporación de nuevos desarrolladores al proyecto.
-
-Estado: pendiente.
-Prioridad: Alta.
 
 ### Documentación de usuario en /docs
 
