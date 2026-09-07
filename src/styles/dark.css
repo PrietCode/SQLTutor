@@ -183,7 +183,11 @@
   color: #c4ddff;
   background: #10243a;
   border-color: #244f80;
-  border-left-color: #4da3ff;
+}
+.app-shell.dark-mode .join-note::before {
+  color: #d6e9ff;
+  background: #19365a;
+  border-color: #32679e;
 }
 .app-shell.dark-mode .join-note strong {
   color: #d6e9ff;
@@ -197,9 +201,12 @@
 }
 .app-shell.dark-mode .step-insight {
   color: #d6e9ff;
-  background: #10243a;
+  background: linear-gradient(135deg, #10243a, #132b46);
   border-color: #244f80;
-  border-left-color: #4d7df4;
+}
+.app-shell.dark-mode .step-insight::before,
+.app-shell.dark-mode .step-insight::after {
+  color: #7da2ff;
 }
 .app-shell.dark-mode .step-insight p {
   color: #c4ddff;
@@ -278,17 +285,21 @@
   background: #19365a;
   border-color: #32679e;
 }
-.app-shell.dark-mode .subquery-short-circuit {
+.app-shell.dark-mode .subquery-cycle-detail .subquery-short-circuit {
   color: #c4ddff;
-  background: #10243a !important;
-  border-color: #244f80 !important;
-  border-left-color: #4da3ff !important;
+  background: linear-gradient(135deg, #10243a, #132b46);
+  border-color: #32679e;
 }
-.app-shell.dark-mode .subquery-short-circuit b {
-  color: #d6e9ff !important;
+.app-shell.dark-mode .subquery-cycle-detail .subquery-short-circuit::before {
+  color: #d6e9ff;
+  background: #19365a;
+  border-color: #32679e;
 }
-.app-shell.dark-mode .subquery-short-circuit span {
-  color: #c4ddff !important;
+.app-shell.dark-mode .subquery-cycle-detail .subquery-short-circuit b {
+  color: #d6e9ff;
+}
+.app-shell.dark-mode .subquery-cycle-detail .subquery-short-circuit span {
+  color: #c4ddff;
 }
 .app-shell.dark-mode .external-row-panel {
   background: #101827;

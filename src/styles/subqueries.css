@@ -128,7 +128,7 @@
   transform: translateY(-1px);
 }
 .subquery-stage {
-  border-left-color: #d28a00 !important;
+  --sql-accent: #d28a00;
   background: linear-gradient(180deg, #fffdf8, #fffaf0);
 }
 .subquery-query-block {
@@ -249,20 +249,38 @@
   font-size: 9px;
   font-weight: 800;
 }
-.subquery-short-circuit {
+.subquery-cycle-detail .subquery-short-circuit {
+  position: relative;
   display: grid;
   gap: 3px;
-  padding: 8px !important;
+  padding: 23px 8px 8px;
   color: #31547d;
-  background: #eef6ff !important;
-  border: 1px solid #c9e1ff !important;
-  border-left: 3px solid #5aa9f7 !important;
+  background: linear-gradient(135deg, #f7fbff, #eef6ff);
+  border: 1px dashed #9fc6f6;
+  border-radius: 4px 10px 10px;
+  box-shadow: inset 0 1px 0 #fff;
 }
-.subquery-short-circuit b {
-  color: #174f92 !important;
+.subquery-cycle-detail .subquery-short-circuit::before {
+  content: 'EXISTS / STOP';
+  position: absolute;
+  top: 0;
+  right: 8px;
+  padding: 3px 5px 2px;
+  color: #174f92;
+  background: #dfeeff;
+  border: 1px solid #9fc6f6;
+  border-top: 0;
+  border-radius: 0 0 4px 4px;
+  font:
+    700 8px/1 'JetBrains Mono',
+    monospace;
+  letter-spacing: 0.4px;
 }
-.subquery-short-circuit span {
-  color: #31547d !important;
+.subquery-cycle-detail .subquery-short-circuit b {
+  color: #174f92;
+}
+.subquery-cycle-detail .subquery-short-circuit span {
+  color: #31547d;
 }
 .subquery-carousel,
 .subquery-carousel-body,

@@ -2,15 +2,23 @@
   padding: 18px;
 }
 .large-chip {
-  display: inline-block;
-  padding: 5px 8px;
-  border-left: 3px solid #4d78dc;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 4px 8px 5px;
   color: #4469bc;
   background: #edf3ff;
-  border-radius: 5px;
+  border: 1px solid #c4d5f8;
+  border-radius: 5px 11px 5px 11px;
+  box-shadow: inset 0 -2px 0 var(--sql-accent, #4d78dc);
   font:
     700 9px 'JetBrains Mono',
     monospace;
+  letter-spacing: 0.5px;
+}
+.large-chip::before {
+  content: '::';
+  color: var(--sql-accent, #4d78dc);
 }
 .explanation h2 {
   margin: 10px 0 16px;

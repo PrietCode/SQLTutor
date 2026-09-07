@@ -177,18 +177,30 @@
   letter-spacing: 0.5px;
 }
 .stage-card {
+  --sql-accent: #7d9dee;
+  position: relative;
   width: 100%;
   padding: 14px;
-  background: white;
+  background: linear-gradient(135deg, #fff 0%, #fff 72%, #f5f8ff 100%);
   border: 1px solid #dfe4ed;
-  border-left: 3px solid #7d9dee;
-  border-radius: 12px;
+  border-radius: 4px 12px 12px;
   box-shadow: 0 5px 18px #21365e08;
   transition:
     box-shadow 0.65s ease,
     border-color 0.35s ease,
     transform 0.25s ease;
   animation: stageIn 0.35s ease both;
+}
+.stage-card::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 14px;
+  left: 14px;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--sql-accent) 0 10px, transparent 10px 15px);
+  opacity: 0.75;
+  pointer-events: none;
 }
 @keyframes stageIn {
   from {
@@ -251,26 +263,26 @@
     0 8px 25px #366ce018;
 }
 .accent-violet {
-  border-left-color: #8b63dd !important;
+  --sql-accent: #8b63dd;
 }
 .accent-cyan {
-  border-left-color: #3eb5c3 !important;
+  --sql-accent: #3eb5c3;
 }
 .accent-amber {
-  border-left-color: #efb643 !important;
+  --sql-accent: #efb643;
 }
 .accent-green {
-  border-left-color: #4eba7b !important;
+  --sql-accent: #4eba7b;
 }
 .accent-orange {
-  border-left-color: #ee8b49 !important;
+  --sql-accent: #ee8b49;
 }
 .accent-blue {
-  border-left-color: #4b7fe9 !important;
+  --sql-accent: #4b7fe9;
 }
 .accent-pink {
-  border-left-color: #d968a6 !important;
+  --sql-accent: #d968a6;
 }
 .accent-red {
-  border-left-color: #db5d69 !important;
+  --sql-accent: #db5d69;
 }
